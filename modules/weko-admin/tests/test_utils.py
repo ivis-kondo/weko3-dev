@@ -284,7 +284,7 @@ def test_package_reports(client,mocker):
 
 # def make_stats_file(raw_stats, file_type, year, month):
 # .tox/c1/bin/pytest --cov=weko_admin tests/test_utils.py::test_make_stats_file -vv -s --cov-branch --cov-report=term --basetemp=/code/modules/weko-admin/.tox/c1/tmp
-def test_make_stats_file(client,mocker):
+def test_make_stats_file(client,mocker,roles):
     current_app.config.update(WEKO_ADMIN_OUTPUT_FORMAT="csv")
     mocker.patch("weko_admin.utils.write_report_file_rows")
     raw_stats=""
@@ -304,7 +304,7 @@ def test_make_stats_file(client,mocker):
         'Total Detail Views,10\n'
     result = make_stats_file(raw_stats,file_type,year,month)
     assert result.getvalue() == test
-    
+
     # filetype = billing_file_download
     file_type = "billing_file_download"
     raw_stats={"all_groups":["test_group"]}
@@ -313,10 +313,10 @@ def test_make_stats_file(client,mocker):
         'Aggregation Month,2022-10\n'\
         '""\n'\
         'No. Of Paid File Downloads\n'\
-        'File Name,Registered Index Name,No. Of Times Downloaded,test_group,Non-Logged In User,Logged In User,Site License,Admin,Registrar\n'
+        'File Name,Registered Index Name,No. Of Times Downloaded,Non-Logged In User,System Administrator,Repository Administrator,Contributor,Community Administrator,Site License,Admin,Registrar\n'
     result = make_stats_file(raw_stats,file_type,year,month)
     assert result.getvalue() == test
-    
+
     # filetype = site_access
     ## open_access in raw_stats
     file_type = "site_access"
@@ -394,29 +394,45 @@ def test_write_report_file_rows(db,users):
     record = [{"file_key":"test_file_key","index_list":"test_index_list","total":1,"no_login":"True","login":"False","site_license":"test_site_license","admin":"False","reg":"test_reg"}]
     write_report_file_rows(writer,record)
     assert output.getvalue() == "test_file_key,test_index_list,1,True,False,test_site_license,False,test_reg\n"
-    
+
     # filetype is billiing_file_download
     output = StringIO()
     writer = csv.writer(output,delimiter=",",lineterminator="\n")
-    record = {
-        "record1": {"file_key":"test_file_key1",
-               "index_list":"test_index_list1",
-               "total":1,"no_login":"True",
-               "login":"False",
-               "site_license":"test_site_license1",
-               "admin":"False","reg":"test_reg1"},
-        "record2": {"file_key":"test_file_key2",
-               "index_list":"test_index_list2",
-               "total":1,"no_login":"True",
-               "login":"False",
-               "site_license":"test_site_license2",
-               "admin":"False","reg":"test_reg2",
-               "group_counts":{"test_group":10}}
-    }
+    record = [
+        {
+            "file_key":"test_file_key1",
+            "index_list":"test_index_list1",
+            "total":1,
+            "no_login": 1,
+            "login": 0,
+            "site_license": 1,
+            "admin": 0,
+            "reg": 0,
+            "System Administrator": 0,
+            "Repository Administrator": 0,
+            "Contributor": 0,
+            "Community Administrator": 0
+        },
+        {
+            "file_key":"test_file_key2",
+            "index_list":"test_index_list2",
+            "total":2,
+            "no_login": 0,
+            "login": 2,
+            "site_license": 0,
+            "admin": 2,
+            "reg": 2,
+            "System Administrator": 0,
+            "Repository Administrator": 2,
+            "Contributor": 0,
+            "Community Administrator": 0,
+            "group_counts": { "test_group":2 },
+        }
+    ]
     other_info = ["test_group"]
     write_report_file_rows(writer,record,"billing_file_download",other_info)
-    assert output.getvalue() == "test_file_key1,test_index_list1,1,True,False,test_site_license1,False,test_reg1\n"\
-                                "test_file_key2,test_index_list2,1,10,True,False,test_site_license2,False,test_reg2\n"
+    assert output.getvalue() == "test_file_key1,test_index_list1,1,1,0,0,0,0,1,0,0\n"\
+                                "test_file_key2,test_index_list2,2,0,0,2,0,0,0,0,2\n"
     # filetype is index_access
     record = [{"index_name":"test_index","view_count":"10"}]
     output = StringIO()
