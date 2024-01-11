@@ -27,6 +27,7 @@ from flask import Blueprint, abort, current_app, jsonify, make_response, \
 from invenio_communities.models import Community
 from invenio_records_rest.utils import obj_or_import_string
 from invenio_rest import ContentNegotiatedMethodView
+from invenio_db import db
 
 from .api import Journals
 from .errors import JournalAddedRESTError, JournalBaseRESTError, \
@@ -46,7 +47,7 @@ def need_record_permission(factory_name):
                                              **kwargs):
             permission_factory = (getattr(self, factory_name))
 
-            if permission_factory:
+            if permission_factory is not None:
                 if not permission_factory.can():
                     from flask_login import current_user
                     if not current_user.is_authenticated:
@@ -72,6 +73,16 @@ def create_blueprint(app, endpoints):
         __name__,
         url_prefix='',
     )
+    
+    @blueprint.teardown_request
+    def dbsession_clean(exception):
+        current_app.logger.debug("weko_indextree_journal dbsession_clean: {}".format(exception))
+        if exception is None:
+            try:
+                db.session.commit()
+            except:
+                db.session.rollback()
+        db.session.remove()
 
     for endpoint, options in (endpoints or {}).items():
         if 'record_serializers' in options:
@@ -181,6 +192,7 @@ class JournalActionResource(ContentNegotiatedMethodView):
     def get(self, journal_id, **kwargs):
         """Get a journal record."""
         try:
+            journal = None
             if journal_id != 0:
                 journal = self.record_class.get_journal(journal_id)
 
@@ -229,19 +241,23 @@ class JournalActionResource(ContentNegotiatedMethodView):
         if not journal_id or journal_id <= 0:
             raise JournalNotFoundRESTError()
 
-        action = request.values.get('action', 'all')
-        res = self.record_class.get_self_path(journal_id)
-        if not res:
-            raise JournalDeletedRESTError()
+        if not self.record_class.delete(journal_id):
 
-        if action in ('move', 'all'):
-            result = self.record_class.\
-                delete_by_action(action, journal_id)
-            if not result:
-                raise JournalBaseRESTError(
-                    description='Could not delete data.')
-        else:
-            raise JournalInvalidDataRESTError()
+            raise JournalDeletedRESTError()
+        
+        #action = request.values.get('action', 'all')
+        #res = self.record_class.get_self_path(journal_id)
+        #if not res:
+        #    raise JournalDeletedRESTError()
+#
+        #if action in ('move', 'all'):
+        #    result = self.record_class.\
+        #        delete_by_action(action, journal_id)
+        #    if not result:
+        #        raise JournalBaseRESTError(
+        #            description='Could not delete data.')
+        #else:
+        #    raise JournalInvalidDataRESTError()
 
         status = 200
         msg = 'Journal deleted successfully.'

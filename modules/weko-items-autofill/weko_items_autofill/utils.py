@@ -109,29 +109,6 @@ def get_item_id(item_type_id):
     return results
 
 
-def convert_html_escape(text):
-    """Convert escape HTML to character.
-
-    :type text: String
-    """
-    if not isinstance(text, str):
-        return
-    html_escape = {
-        "&amp;": "&",
-        "&quot;": '"',
-        "&apos;": "'",
-        "&gt;": ">",
-        "&lt;": "<",
-    }
-    try:
-        for key, value in html_escape.items():
-            text = text.replace(key, value)
-    except Exception as e:
-        current_app.logger.debug(e)
-
-    return text
-
-
 def _get_title_data(jpcoar_data, key, rtn_title):
     """Get title data.
 
@@ -140,7 +117,7 @@ def _get_title_data(jpcoar_data, key, rtn_title):
     @param rtn_title: title list
     """
     try:
-        if str(key).index('item') is not None:
+        if str(key).find('item') != -1:
             rtn_title['title_parent_key'] = key
             title_value = jpcoar_data['title']
             if '@value' in title_value.keys():
@@ -151,6 +128,9 @@ def _get_title_data(jpcoar_data, key, rtn_title):
                 if 'xml:lang' in title_lang.keys():
                     rtn_title['title_lang_lst_key'] = title_lang[
                         'xml:lang'].split('.')
+        else:
+            #current_app.logger.debug("not contain 'item' in key:{}".format(key))
+            return
     except Exception as e:
         current_app.logger.debug(e)
 
@@ -188,17 +168,20 @@ def get_crossref_record_data(pid, doi, item_type_id):
     """
     result = list()
     api_response = CrossRefOpenURL(pid, doi).get_data()
-    current_app.logger.error("CrossRefOpenURL.get_data():{}".format(api_response))
+    current_app.logger.debug("CrossRefOpenURL.get_data():{}".format(api_response))
     if api_response["error"]:
         return result
-    api_response['response'] = convert_crossref_xml_data_to_dictionary(
+    api_response = convert_crossref_xml_data_to_dictionary(
         api_response['response'])
+    current_app.logger.debug("convert_crossref_xml_data_to_dictionary():{}".format(api_response))
+    if api_response["error"]:
+        return result
     api_data = get_crossref_data_by_key(api_response, 'all')
     with db.session.no_autoflush:
         items = ItemTypes.get_by_id(item_type_id)
     if items is None:
         return result
-    elif items.form is not None:
+    if items.form is not None:
         autofill_key_tree = sort_by_item_type_order(
             items.form,
             get_autofill_key_tree(
@@ -249,10 +232,7 @@ def get_basic_cinii_data(data):
     for item in data:
         new_data = dict()
         new_data['@value'] = item.get('@value')
-        if item.get('@language'):
-            new_data['@language'] = item.get('@language')
-        else:
-            new_data['@language'] = default_language
+        new_data['@language'] = item['@language'] if item.get('@language') else default_language
         result.append(new_data)
     return result
 
@@ -273,7 +253,7 @@ def pack_single_value_as_dict(data):
     return new_data
 
 
-def pack_data_with_multiple_type_cinii(data1, type1, data2, type2):
+def pack_data_with_multiple_type_cinii(data, type1, type2):
     """Map CiNii multi data with type.
 
     Arguments:
@@ -287,14 +267,15 @@ def pack_data_with_multiple_type_cinii(data1, type1, data2, type2):
 
     """
     result = list()
-    if data1:
+    _data = {item["@type"]:item["@value"] for item in data}
+    if type1 in _data:
         new_data = dict()
-        new_data['@value'] = data1
+        new_data['@value'] = _data[type1]
         new_data['@type'] = type1
         result.append(new_data)
-    if data2:
+    if type2 in _data:
         new_data = dict()
-        new_data['@value'] = data2
+        new_data['@value'] = _data[type2]
         new_data['@type'] = type2
         result.append(new_data)
     return result
@@ -313,16 +294,10 @@ def get_cinii_creator_data(data):
     :return: list of creator name
     """
     result = list()
-    default_language = 'ja'
     for item in data:
-        for i in range(0, len(item)):
-            new_data = dict()
-            new_data['@value'] = item[i].get('@value')
-            if item[i].get('@language'):
-                new_data['@language'] = item[i].get('@language')
-            else:
-                new_data['@language'] = default_language
-            result.append(new_data)
+        name_data = item.get('foaf:name')
+        if name_data:
+            result.append(get_basic_cinii_data(name_data))
     return result
 
 
@@ -339,22 +314,10 @@ def get_cinii_contributor_data(data):
     :return:packed data
     """
     result = list()
-    default_language = 'ja'
     for item in data:
-        if item.get('con:organization') is None:
-            continue
-        organization = item['con:organization'][0]
-        if organization.get('foaf:name') is None:
-            continue
-        for i in range(0, len(organization.get('foaf:name'))):
-            new_data = dict()
-            new_data['@value'] = organization['foaf:name'][i].get('@value')
-            if organization['foaf:name'][i].get('@language'):
-                language = organization['foaf:name'][i].get('@language')
-                new_data['@language'] = language
-            else:
-                new_data['@language'] = default_language
-            result.append(new_data)
+        name_data = item.get("foaf:name")
+        if name_data:
+            result.append(get_basic_cinii_data(name_data))
     return result
 
 
@@ -373,15 +336,17 @@ def get_cinii_description_data(data):
     """
     result = list()
     default_language = 'ja'
+    default_type = 'Abstract'
     for item in data:
-        new_data = dict()
-        new_data['@value'] = item.get('@value')
-        new_data['@type'] = 'Abstract'
-        if item.get('@language'):
-            new_data['@language'] = item.get('@language')
-        else:
-            new_data['@language'] = default_language
-        result.append(new_data)
+        notations = item.get("notation")
+        if notations is None:
+            continue
+        for notation in notations:
+            new_data = dict()
+            new_data['@value'] = notation.get('@value')
+            new_data['@type'] = item["type"] if item.get("type") else default_type
+            new_data["@language"] = notation["@language"] if notation.get("@language") else default_language
+            result.append(new_data)
     return result
 
 
@@ -403,15 +368,10 @@ def get_cinii_subject_data(data):
     default_language = 'ja'
     for sub in data:
         new_data = dict()
-        new_data['@scheme'] = 'Other'
-        new_data['@URI'] = sub.get('@id')
-        title = sub.get('dc:title')
-        if title[0] is not None:
-            new_data['@value'] = title[0].get('@value')
-            if title[0].get('@language'):
-                new_data['@language'] = title[0].get('@language')
-            else:
-                new_data['@language'] = default_language
+        new_data["@scheme"] = "Other"
+        new_data["@URI"] = sub.get("@id")
+        new_data["@value"] = sub.get("dc:title")
+        new_data["@language"] = default_language
         result.append(new_data)
     return result
 
@@ -444,9 +404,9 @@ def get_cinii_numpage(data):
     :param: data: CiNii data
     :return: number of page is packed
     """
-    if data.get('prism:pageRange'):
-        return get_cinii_page_data(data.get('prism:pageRange'))
-    else:
+    if data.get('jpcoar:numPages'):
+        return get_cinii_page_data(data.get('jpcoar:numPages'))
+    if data.get('prism:startingPage') and data.get('prism:endingPage'):
         try:
             end = int(data.get('prism:endingPage'))
             start = int(data.get('prism:startingPage'))
@@ -455,6 +415,7 @@ def get_cinii_numpage(data):
         except Exception as e:
             current_app.logger.debug(e)
             return pack_single_value_as_dict(None)
+    return {"@value": None}
 
 
 def get_cinii_date_data(data):
@@ -479,7 +440,11 @@ def get_cinii_date_data(data):
         result['@type'] = 'Issued'
     return result
 
-
+def get_cinii_product_identifier(data, type1, type2):
+    _data = [item.get('identifier') for item in data]
+    result = pack_data_with_multiple_type_cinii(_data, type1, type2)
+    return result
+    
 def get_cinii_data_by_key(api, keyword):
     """Get data from CiNii based on keyword.
 
@@ -487,55 +452,62 @@ def get_cinii_data_by_key(api, keyword):
     :param: keyword: keyword for search
     :return: data for keyword
     """
-    data_response = api['response'].get('@graph')
+    data_response = api['response']
     result = dict()
     if data_response is None:
         return result
-    data = data_response[0]
-    if (keyword == 'title' or keyword == 'alternative') \
-            and data.get('dc:title'):
+    data = data_response
+    if keyword == 'title' and data.get('dc:title'):
         result[keyword] = get_basic_cinii_data(data.get('dc:title'))
-    elif keyword == 'creator' and data.get('dc:creator'):
-        result[keyword] = get_cinii_creator_data(data.get('dc:creator'))
-    elif keyword == 'contributor' and data.get('foaf:maker'):
-        result[keyword] = get_cinii_contributor_data(data.get('foaf:maker'))
-    elif keyword == 'description' and data.get('dc:description'):
+    elif keyword == 'alternative' and data.get('dcterms:alternative'):
+        result[keyword] = get_basic_cinii_data(data.get('dcterms:alternative'))
+    elif keyword == 'creator' and data.get('creator'):
+        result[keyword] = get_cinii_creator_data(data.get('creator'))
+    elif keyword == 'contributor' and data.get('contributor'):
+        result[keyword] = get_cinii_contributor_data(data.get('contributor'))
+    elif keyword == 'description' and data.get('description'):
         result[keyword] = get_cinii_description_data(
-            data.get('dc:description')
+            data.get('description')
         )
     elif keyword == 'subject' and data.get('foaf:topic'):
         result[keyword] = get_cinii_subject_data(data.get('foaf:topic'))
-    elif keyword == 'sourceTitle' and data.get('prism:publicationName'):
+    elif keyword == 'sourceTitle' and data.get('publication') \
+        and data.get('publication').get('prism:publicationName'):
         result[keyword] = get_basic_cinii_data(
-            data.get('prism:publicationName')
+            data.get('publication').get('prism:publicationName')
         )
-    elif keyword == 'volume' and data.get('prism:volume'):
-        result[keyword] = pack_single_value_as_dict(data.get('prism:volume'))
-    elif keyword == 'issue' and data.get('prism:number'):
-        result[keyword] = pack_single_value_as_dict(data.get('prism:number'))
-    elif keyword == 'pageStart' and data.get('prism:startingPage'):
-        result[keyword] = get_cinii_page_data(data.get('prism:startingPage'))
-    elif keyword == 'pageEnd' and data.get('prism:endingPage'):
-        result[keyword] = get_cinii_page_data(data.get('prism:endingPage'))
-    elif keyword == 'numPages':
-        result[keyword] = get_cinii_numpage(data)
-    elif keyword == 'date' and data.get('prism:publicationDate'):
+    elif keyword == 'volume' and data.get('publication') \
+        and data.get("publication").get('prism:volume'):
+        result[keyword] = pack_single_value_as_dict(data.get("publication").get('prism:volume'))
+    elif keyword == 'issue' and data.get('publication') \
+        and data.get("publication").get('prism:number'):
+        result[keyword] = pack_single_value_as_dict(data.get("publication").get('prism:number'))
+    elif keyword == 'pageStart' and data.get('publication') \
+        and data.get("publication").get('prism:startingPage'):
+        result[keyword] = get_cinii_page_data(data.get("publication").get('prism:startingPage'))
+    elif keyword == 'pageEnd' and data.get('publication') \
+        and data.get('publication').get('prism:endingPage'):
+        result[keyword] = get_cinii_page_data(data.get("publication").get('prism:endingPage'))
+    elif keyword == 'numPages' and data.get('publication'):
+        result[keyword] = get_cinii_numpage(data.get('publication'))
+    elif keyword == 'date' and data.get('publication') \
+        and data.get('publication').get('prism:publicationDate'):
         result[keyword] = get_cinii_date_data(
-            data.get('prism:publicationDate'))
-    elif keyword == 'publisher' and data.get('dc:publisher'):
-        result[keyword] = get_basic_cinii_data(data.get('dc:publisher'))
-    elif keyword == 'sourceIdentifier':
+            data.get('publication').get('prism:publicationDate'))
+    elif keyword == 'publisher' and data.get('publication') \
+        and data.get('publication').get('dc:publisher'):
+        result[keyword] = get_basic_cinii_data(data.get('publication').get('dc:publisher'))
+    elif keyword == 'sourceIdentifier' and data.get('publication') \
+        and data.get('publication').get('publicationIdentifier'):
         result[keyword] = pack_data_with_multiple_type_cinii(
-            data.get('prism:issn'),
+            data.get('publication').get('publicationIdentifier'),
             'ISSN',
-            data.get('cinii:ncid'),
             'NCID'
         )
-    elif keyword == 'relation':
-        result[keyword] = pack_data_with_multiple_type_cinii(
-            data.get('cinii:naid'),
+    elif keyword == "relation" and data.get('productIdentifier'):
+        result[keyword] = get_cinii_product_identifier(
+            data.get('productIdentifier'),
             'NAID',
-            data.get('prism:doi'),
             'DOI'
         )
     elif keyword == 'all':
@@ -925,31 +897,31 @@ def get_key_value(schema_form, val, parent_key):
                 parent_key,
                 value_key.get("xml:lang")
             ).get('key')
-        elif value_key.get("identifierType") is not None:
+        if value_key.get("identifierType") is not None:
             key_data['@type'] = get_autofill_key_path(
                 schema_form,
                 parent_key,
                 value_key.get("identifierType")
             ).get('key')
-        elif value_key.get("descriptionType") is not None:
+        if value_key.get("descriptionType") is not None:
             key_data['@type'] = get_autofill_key_path(
                 schema_form,
                 parent_key,
                 value_key.get("descriptionType")
             ).get('key')
-        elif value_key.get("subjectScheme") is not None:
+        if value_key.get("subjectScheme") is not None:
             key_data['@scheme'] = get_autofill_key_path(
                 schema_form,
                 parent_key,
                 value_key.get("subjectScheme")
             ).get('key')
-        elif value_key.get("subjectURI") is not None:
+        if value_key.get("subjectURI") is not None:
             key_data['@URI'] = get_autofill_key_path(
                 schema_form,
                 parent_key,
                 value_key.get("subjectURI")
             ).get('key')
-        elif value_key.get("dateType") is not None:
+        if value_key.get("dateType") is not None:
             key_data['@type'] = get_autofill_key_path(
                 schema_form,
                 parent_key,
@@ -1046,10 +1018,9 @@ def build_record_model(item_autofill_key, api_data):
             record_model = {}
             for key, value in data_model.items():
                 merge_dict(record_model, value)
-            is_multiple_data = is_multiple(record_model, api_autofill_data)
-            fill_data(record_model, api_autofill_data, is_multiple_data)
-            if record_model:
-                _record_model_lst.append(record_model)
+            new_record_model = fill_data(record_model, api_autofill_data)
+            if new_record_model:
+                _record_model_lst.append(new_record_model)
                 _filled_key.append(k)
 
     record_model_lst = list()
@@ -1148,11 +1119,7 @@ def deepcopy(original_object, new_object):
     import copy
     if isinstance(original_object, dict):
         for k, v in original_object.items():
-            if not isinstance(new_object, (dict, list)):
-                new_object = {}
-                deepcopy(copy.deepcopy(v), new_object[k])
-            else:
-                new_object[k] = copy.deepcopy(v)
+            new_object[k] = copy.deepcopy(v)
     elif isinstance(original_object, list):
         for original_data in original_object:
             if isinstance(original_data, (dict, list)):
@@ -1161,39 +1128,43 @@ def deepcopy(original_object, new_object):
         return
 
 
-def fill_data(form_model, autofill_data, is_multiple_data=False):
+def fill_data(form_model, autofill_data):
     """Fill data to form model.
 
     @param form_model: the form model.
     @param autofill_data: the autofill data
     @param is_multiple_data: multiple flag.
     """
+    result = {} if isinstance(form_model, dict) else []
+    is_multiple_data = is_multiple(form_model, autofill_data)
     if isinstance(autofill_data, list):
-        if is_multiple_data:
-            key = list(form_model.keys())[0]
+        key = list(form_model.keys())[0] if len(form_model) != 0 else None
+        if is_multiple_data or (not is_multiple_data and isinstance(form_model.get(key),list)):
             model_clone = {}
             deepcopy(form_model[key][0], model_clone)
-            form_model[key] = []
+            result[key]=[]
             for data in autofill_data:
                 model = {}
                 deepcopy(model_clone, model)
-                fill_data(model, data)
-                form_model[key].append(model.copy())
+                new_model = fill_data(model, data)
+                result[key].append(new_model.copy())
         else:
-            fill_data(form_model, autofill_data[0])
+            result = fill_data(form_model, autofill_data[0])
     elif isinstance(autofill_data, dict):
         if isinstance(form_model, dict):
             for k, v in form_model.items():
                 if isinstance(v, str):
-                    form_model[k] = autofill_data.get(v, '')
+                    result[k] = autofill_data.get(v,'')
                 else:
-                    fill_data(v, autofill_data)
+                    new_v = fill_data(v, autofill_data)
+                    result[k] = new_v
         elif isinstance(form_model, list):
             for v in form_model:
-                fill_data(v, autofill_data)
+                new_v = fill_data(v, autofill_data)
+                result.append(new_v)
     else:
         return
-
+    return result
 
 def is_multiple(form_model, autofill_data):
     """Check form model.
@@ -1224,33 +1195,41 @@ def get_workflow_journal(activity_id):
     return journal_data
 
 
-def convert_crossref_xml_data_to_dictionary(api_data):
+def convert_crossref_xml_data_to_dictionary(api_data, encoding='utf-8'):
     """Convert CrossRef XML data to dictionary.
 
     :param api_data: CrossRef xml data
+    :param encoding: Encoding type
     :return: CrossRef data is converted to dictionary.
     """
-    rtn_data = {}
-    result = api_data.split('\n')[1]
-    root = etree.fromstring(result)
-    crossref_xml_data_keys = config.WEKO_ITEMS_AUTOFILL_CROSSREF_XML_DATA_KEYS
-    contributor_roles = config.WEKO_ITEMS_AUTOFILL_CROSSREF_CONTRIBUTOR
-    for elem in root.getiterator():
-        if etree.QName(elem).localname in crossref_xml_data_keys:
-            if etree.QName(elem).localname == "contributor" or etree.QName(
-                    elem).localname == "organization":
-                _get_contributor_and_author_names(elem, contributor_roles,
-                                                  rtn_data)
-            elif etree.QName(elem).localname == "year":
-                if 'media_type' in elem.attrib \
-                        and elem.attrib['media_type'] == "print":
-                    rtn_data.update({etree.QName(elem).localname: elem.text})
-            elif etree.QName(elem).localname in ["issn", "isbn"]:
-                if 'type' in elem.attrib \
-                        and elem.attrib['type'] == "print":
-                    rtn_data.update({etree.QName(elem).localname: elem.text})
-            else:
-                rtn_data.update({etree.QName(elem).localname: elem.text})
+    result = {}
+    rtn_data = {
+        'response': {},
+        'error': ''
+    }
+    try:
+        root = etree.XML(api_data.encode(encoding))
+        crossref_xml_data_keys = config.WEKO_ITEMS_AUTOFILL_CROSSREF_XML_DATA_KEYS
+        contributor_roles = config.WEKO_ITEMS_AUTOFILL_CROSSREF_CONTRIBUTOR
+        for elem in root.getiterator():
+            if etree.QName(elem).localname in crossref_xml_data_keys:
+                if etree.QName(elem).localname == "contributor" or etree.QName(
+                        elem).localname == "organization":
+                    _get_contributor_and_author_names(elem, contributor_roles,
+                                                      result)
+                elif etree.QName(elem).localname == "year":
+                    if 'media_type' in elem.attrib \
+                            and elem.attrib['media_type'] == "print":
+                        result.update({etree.QName(elem).localname: elem.text})
+                elif etree.QName(elem).localname in ["issn", "isbn"]:
+                    if 'type' in elem.attrib \
+                            and elem.attrib['type'] == "print":
+                        result.update({etree.QName(elem).localname: elem.text})
+                else:
+                    result.update({etree.QName(elem).localname: elem.text})
+        rtn_data['response'] = result
+    except Exception as e:
+        rtn_data['error'] = str(e)
     return rtn_data
 
 
@@ -1310,14 +1289,15 @@ def get_wekoid_record_data(recid, item_type_id):
         if values and values[0] and mapping_key not in ignore_mapping:
             item_map_data_src[mapping_key] = values[0]
     # Get destination mapping info.
-    mapping_des = Mapping.get_record(item_type_id)
-    item_map_des = get_mapping(mapping_des, "jpcoar_mapping")
+    item_map_des = get_mapping(item_type_id, "jpcoar_mapping")
     item_map_data_des = {}
-    for mapping_key, item_key in item_map_des.items():
-        if mapping_key in item_map_data_src.keys():
-            value = item_map_data_src.get(mapping_key)
-            if not all(x is None for x in value):
-                item_map_data_des[item_key] = value
+    for mapping_key, item_key_str in item_map_des.items():
+        for item_key in item_key_str.split(','):
+            if mapping_key in item_map_data_src.keys():
+                value = item_map_data_src.get(mapping_key)
+                if not all(x is None for x in value):
+                    item_map_data_des[item_key] = value
+                    break
     # Convert structure of schema to record model.
     record_model = build_record_model_for_wekoid(
         item_type_id, item_map_data_des)
@@ -1416,7 +1396,7 @@ def set_val_for_record_model(record_model, item_map_data):
         keys = k.split('.')
         if len(keys) > the_most_levels:
             the_most_levels = len(keys)
-        set_val_for_all_child(keys, record_model, item_map_data.get(k))
+        set_val_for_all_child(keys, record_model, v)
     # Remove item if value is empty.
     # values map with this condition => remove.
     condition = [[], {}, [{}], '']
@@ -1445,10 +1425,10 @@ def set_val_for_all_child(keys, models, values):
                 if k == keys[-1]:
                     model_temp[k] = val if val else ''
     if isinstance(model_temp, list):
-        if len(model_temp) == len(values):
-            # Set value for case multiple data.
-            i = 0
-            for val in values:
+        organization_item = copy.deepcopy(model_temp[0])
+        for i, val in enumerate(values):
+            if i < len(model_temp):
+                # Set value for case multiple data.
                 if not model_temp[i].get(keys[-1]) is None and model_temp[i][
                         keys[-1]].get(keys[-1]) is None:
                     model_temp[i][keys[-1]] = val if val else ''
@@ -1461,12 +1441,8 @@ def set_val_for_all_child(keys, models, values):
                                 keys[-1]) is None:
                             model_temp[i][k] = v
                             model_temp[i][k][0][keys[-1]] = val if val else ''
-                i += 1
-        else:
-            # The first time set value for this item.
-            organization_item = model_temp[0]
-            model_temp.remove(organization_item)
-            for val in values:
+            else:
+                # The first time set value for this item.
                 temp = copy.deepcopy(organization_item)
                 if not temp.get(keys[-1]) is None and temp[keys[-1]].get(
                         keys[-1]) is None:
@@ -1501,3 +1477,4 @@ def remove_sub_record_model_no_value(item, condition):
         item = [] if item in condition else item
         for sub_item in item:
             remove_sub_record_model_no_value(sub_item, condition)
+

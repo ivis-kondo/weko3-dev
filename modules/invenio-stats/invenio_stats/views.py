@@ -18,6 +18,7 @@ from flask import Blueprint, abort, current_app, jsonify, request
 from invenio_pidrelations.contrib.versioning import PIDVersioning
 from invenio_pidstore.models import PersistentIdentifier
 from invenio_rest.views import ContentNegotiatedMethodView
+from invenio_db import db
 
 from . import config
 from .errors import InvalidRequestInputError, UnknownQueryError
@@ -113,6 +114,7 @@ class QueryRecordViewCount(WekoQuery):
 
     def _get_data(self, record_id, query_date=None, get_period=False):
         """Get data."""
+        
         result = {}
         period = []
         country = {}
@@ -141,6 +143,7 @@ class QueryRecordViewCount(WekoQuery):
             query_total = query_total_cfg.query_class(
                 **query_total_cfg.query_config)
             res_total = query_total.run(**params)
+            
             result['total'] = res_total['count']
             for d in res_total['buckets']:
                 country[d['key']] = d['count']
@@ -190,6 +193,38 @@ class QueryRecordViewCount(WekoQuery):
 
             if not versioning.exists:
                 return self._get_data(record_id, query_date, get_period)
+
+            _data = list(self._get_data(
+                record_id=child.object_uuid,
+                query_date=query_date,
+                get_period=True) for child in versioning.children.all())
+
+            countries = result['country']
+            for _idx in _data:
+                for key, value in _idx['country'].items():
+                    countries[key] = countries.get(key, 0) + value
+                result['total'] = result['total'] + _idx['total']
+                result['period'] = _idx.get('period', [])
+
+        return result
+
+    def get_data_by_pid_value(self, pid_value, query_date=None, get_period=False):
+        """Public interface of _get_data."""
+        result = dict(
+            total=0,
+            country=dict(),
+            period=list()
+        )
+
+        recid = PersistentIdentifier.query.filter_by(
+            pid_type='recid',
+            pid_value=pid_value).first()
+
+        if recid:
+            versioning = PIDVersioning(child=recid)
+
+            if not versioning.exists:
+                return self._get_data(recid.object_uuid, query_date, get_period)
 
             _data = list(self._get_data(
                 record_id=child.object_uuid,
@@ -368,6 +403,7 @@ class QueryItemRegReport(WekoQuery):
     @stats_api_access_required
     def get(self, **kwargs):
         """Get item registration report."""
+        page_index = 0
         try:
             page_index = int(request.args.get('p', 1)) - 1
         except Exception as e:
@@ -592,3 +628,13 @@ blueprint.add_url_rule(
     '/<string:event>/<int:year>/<int:month>',
     view_func=common_reports,
 )
+
+@blueprint.teardown_request
+def dbsession_clean(exception):
+    current_app.logger.debug("invenio_stats dbsession_clean: {}".format(exception))
+    if exception is None:
+        try:
+            db.session.commit()
+        except:
+            db.session.rollback()
+    db.session.remove()

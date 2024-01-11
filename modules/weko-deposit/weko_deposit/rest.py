@@ -41,7 +41,7 @@ from simplekv.memory.redisstore import RedisStore
 from sqlalchemy.exc import SQLAlchemyError
 from weko_redis.redis import RedisConnection
 
-from .api import WekoDeposit
+from .api import WekoDeposit, WekoRecord
 
 # from copy import deepcopy
 
@@ -75,6 +75,16 @@ def create_blueprint(app, endpoints):
         __name__,
         url_prefix='',
     )
+    
+    @blueprint.teardown_request
+    def dbsession_clean(exception):
+        current_app.logger.debug("weko_deposit dbsession_clean: {}".format(exception))
+        if exception is None:
+            try:
+                db.session.commit()
+            except:
+                db.session.rollback()
+        db.session.remove()
 
     for endpoint, options in (endpoints or {}).items():
 
@@ -234,6 +244,12 @@ class ItemResource(ContentNegotiatedMethodView):
                     pid_type='recid',
                     object_uuid=upgrade_record.model.id).one_or_none()
                 pid_value = pid.pid_value if pid else pid_value
+
+                # create item link info of upgrade record from parent record
+                weko_record = WekoRecord.get_record_by_pid(
+                    upgrade_record.pid.pid_value)
+                if weko_record:
+                    weko_record.update_item_link(pid_value.split(".")[0])
 
             # Saving ItemMetadata cached on Redis by pid
             redis_connection = RedisConnection()

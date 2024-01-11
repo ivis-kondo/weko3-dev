@@ -23,6 +23,7 @@ import os,sys
 import shutil
 import tempfile
 import json
+import uuid
 from os.path import dirname, join
 
 from elasticsearch import Elasticsearch
@@ -45,7 +46,7 @@ from invenio_cache import InvenioCache
 from invenio_communities.models import Community
 from invenio_db import InvenioDB, db as db_
 from invenio_files_rest import InvenioFilesREST
-from invenio_files_rest.models import Location
+from invenio_files_rest.models import Location, FileInstance
 from invenio_indexer import InvenioIndexer
 from invenio_search import InvenioSearch,RecordsSearch
 from weko_search_ui import WekoSearchUI
@@ -53,7 +54,9 @@ from weko_index_tree.models import Index
 
 from weko_authors.views import blueprint_api
 from weko_authors import WekoAuthors
-from weko_authors.models import Authors, AuthorsPrefixSettings
+from weko_authors.models import Authors, AuthorsPrefixSettings, AuthorsAffiliationSettings
+from weko_theme import WekoTheme
+import weko_authors.mappings.v2
 
 sys.path.append(os.path.dirname(__file__))
 
@@ -133,21 +136,22 @@ class MockEs():
 
 
 @pytest.fixture()
-def base_app(instance_path,search_class):
+def base_app(request, instance_path,search_class):
     """Flask application fixture."""
     app_ = Flask('testapp', instance_path=instance_path)
     app_.config.update(
         SECRET_KEY='SECRET_KEY',
         TESTING=True,
         SERVER_NAME='app',
-        # SQLALCHEMY_DATABASE_URI=os.environ.get(
-        #    'SQLALCHEMY_DATABASE_URI',
-        #    'postgresql+psycopg2://invenio:dbpass123@postgresql:5432/invenio'),
         SQLALCHEMY_DATABASE_URI=os.environ.get(
-            'SQLALCHEMY_DATABASE_URI', 'sqlite:///test.db'),
+           'SQLALCHEMY_DATABASE_URI',
+           'postgresql+psycopg2://invenio:dbpass123@postgresql:5432/wekotest'),
+        # SQLALCHEMY_DATABASE_URI=os.environ.get(
+        #     'SQLALCHEMY_DATABASE_URI', 'sqlite:///test.db'),
         SQLALCHEMY_TRACK_MODIFICATIONS=True,
         INDEX_IMG='indextree/36466818-image.jpg',
-        SEARCH_UI_SEARCH_INDEX='tenant1-weko',
+        SEARCH_UI_SEARCH_INDEX='test-weko',
+        WEKO_AUTHORS_ES_INDEX_NAME='test-authors',
         WEKO_AUTHORS_AFFILIATION_IDENTIFIER_ITEM_OTHER=4,
         WEKO_AUTHORS_LIST_SCHEME_AFFILIATION=[
             'ISNI', 'GRID', 'Ringgold', 'kakenhi', 'Other'],
@@ -158,6 +162,9 @@ def base_app(instance_path,search_class):
         CACHE_REDIS_URL='redis://redis:6379/0',
         CACHE_REDIS_DB='0',
         CACHE_REDIS_HOST="redis",
+        SEARCH_ELASTIC_HOSTS=os.environ.get("INVENIO_ELASTICSEARCH_HOST"),
+        SEARCH_INDEX_PREFIX="{}-".format('test'),
+        SEARCH_CLIENT_CONFIG=dict(timeout=120, max_retries=10),
     )
     Babel(app_)
     InvenioDB(app_)
@@ -168,9 +175,13 @@ def base_app(instance_path,search_class):
     InvenioAssets(app_)
     InvenioIndexer(app_)
     InvenioFilesREST(app_)
-    
-    search = InvenioSearch(app_, client=MockEs())
-    search.register_mappings(search_class.Meta.index, 'mock_module.mapping')
+    if hasattr(request, 'param'):
+        if 'is_es' in request.param:
+            search = InvenioSearch(app_)
+    else:
+        search = InvenioSearch(app_, client=MockEs())
+        search.register_mappings(search_class.Meta.index, 'mock_module.mapping')
+    WekoTheme(app_)
     WekoAuthors(app_)
     WekoSearchUI(app_)
 
@@ -203,6 +214,22 @@ def client(app):
     """Get test client."""
     with app.test_client() as client:
         yield client
+
+from invenio_search import current_search_client
+@pytest.fixture()
+def esindex(app):
+    current_search_client.indices.delete(index='test-*')
+    with open("tests/mock_module/mapping/v6/authors/author-v1.0.0.json","r") as f:
+        mapping = json.load(f)
+    with app.test_request_context():
+        current_search_client.indices.create("test-authors-author-v1.0.0",body=mapping)
+        current_search_client.indices.put_alias(index="test-authors-author-v1.0.0", name=app.config["WEKO_AUTHORS_ES_INDEX_NAME"])
+
+    yield current_search_client
+
+    with app.test_request_context():
+        current_search_client.indices.delete_alias(index="test-authors-author-v1.0.0", name=app.config["WEKO_AUTHORS_ES_INDEX_NAME"])
+        current_search_client.indices.delete(index="test-authors-author-v1.0.0", ignore=[400, 404])
 
 
 @pytest.fixture()
@@ -325,17 +352,7 @@ def users(app, db):
                             description=("this is test community"),
                             root_node_id=index.id)
     db.session.commit()
-    #return [
-    #    {'email': contributor.email, 'id': contributor.id, 'obj': contributor},
-    #    {'email': repoadmin.email, 'id': repoadmin.id, 'obj': repoadmin},
-    #    {'email': sysadmin.email, 'id': sysadmin.id, 'obj': sysadmin},
-    #    {'email': comadmin.email, 'id': comadmin.id, 'obj': comadmin},
-    #    {'email': generaluser.email, 'id': generaluser.id, 'obj': generaluser},
-    #    {'email': originalroleuser.email, 'id': originalroleuser.id, 'obj': originalroleuser},
-    #    {'email': originalroleuser2.email, 'id': originalroleuser2.id, 'obj': originalroleuser2},
-    #    {'email': user.email, 'id': user.id, 'obj': user},
-    #    {'email': student.email,'id': student.id, 'obj': student}
-    #]
+
     return [
         {'email': sysadmin.email, 'id': sysadmin.id, 'obj': sysadmin},
         {'email': repoadmin.email, 'id': repoadmin.id, 'obj': repoadmin},
@@ -350,32 +367,24 @@ def users(app, db):
 
 
 @pytest.fixture()
-def id_prefix(client, users):
-    """Create test prefix."""
-    # login for create prefix
-    login_user_via_session(client=client, email=users[2]['email'])
-    input = {'name': 'testprefix', 'scheme': 'testprefix',
-             'url': 'https://testprefix/##'}
-    client.put('/api/authors/add_prefix',
-               data=json.dumps(input),
-               content_type='application/json')
-    client.get(url_for('security.logout'))
-    authors_prefix = AuthorsPrefixSettings.query.filter_by(
-                        name='testprefix').first()
-    return authors_prefix.id
-
-
-@pytest.fixture()
-def create_author(db):
+def create_author(app, db, esindex):
     def _create_author(data, next_id):
+        data["pk_id"] = str(next_id)
+        es_data = json.loads(json.dumps(data))
+        es_id = uuid.uuid4()
+        data["id"] = str(es_id)
         with db.session.begin_nested():
-            # new_id = Authors.get_sequence(db.session)
-            new_id = next_id
-            data["id"] = str(new_id)
-            data["pk_id"] = str(new_id)
-            author = Authors(id=new_id, json=data)
+            author = Authors(id=next_id, json=data)
             db.session.add(author)
-        return new_id
+        db.session.commit()
+            
+        current_search_client.index(
+            index=app.config["WEKO_AUTHORS_ES_INDEX_NAME"],
+            doc_type=app.config['WEKO_AUTHORS_ES_DOC_TYPE'],
+            id=es_id,
+            body=es_data,
+            refresh='true')
+        return es_id
 
     # Return new author's id
     return _create_author
@@ -398,38 +407,28 @@ def json_data(filename):
 
 
 @pytest.fixture()
-def authors(db):
+def authors(app,db,esindex):
     datas = json_data("data/author.json")
     returns = list()
     for data in datas:
         returns.append(Authors(
             gather_flg=0,
             is_deleted=False,
-            json=json.dumps(data)
+            json=data
         ))
+        es_id = data["id"]
+        es_data = json.loads(json.dumps(data))
+        es_data["id"]=""
+        current_search_client.index(
+            index=app.config["WEKO_AUTHORS_ES_INDEX_NAME"],
+            doc_type=app.config['WEKO_AUTHORS_ES_DOC_TYPE'],
+            id=es_id,
+            body=es_data,
+            refresh='true')
     
     db.session.add_all(returns)
     db.session.commit()
     return returns
-
-
-@pytest.fixture()
-def prefix_settings(db):
-    weko = AuthorsPrefixSettings(
-        id=1,
-        name="WEKO",
-        scheme="WEKO"
-    )
-    orcid = AuthorsPrefixSettings(
-        id=2,
-        name="ORCID",
-        scheme="ORCID",
-        url="https://orcid.org/##"
-    )
-    db.session.add(weko)
-    db.session.add(orcid)
-    db.session.commit()
-    return {"weko":weko,"orcid":orcid}
 
 
 @pytest.fixture()
@@ -443,3 +442,37 @@ def location(app,db):
     db.session.commit()
     return loc
 
+
+@pytest.fixture()
+def authors_prefix_settings(db):
+    apss = list()
+    apss.append(AuthorsPrefixSettings(name="WEKO",scheme="WEKO"))
+    apss.append(AuthorsPrefixSettings(name="ORCID",scheme="ORCID",url="https://orcid.org/##"))
+    apss.append(AuthorsPrefixSettings(name="CiNii",scheme="CiNii",url="https://ci.nii.ac.jp/author/##"))
+    apss.append(AuthorsPrefixSettings(name="KAKEN2",scheme="KAKEN2",url="https://nrid.nii.ac.jp/nrid/##"))
+    apss.append(AuthorsPrefixSettings(name="ROR",scheme="ROR",url="https://ror.org/##"))
+    db.session.add_all(apss)
+    db.session.commit()
+    return apss
+
+@pytest.fixture()
+def authors_affiliation_settings(db):
+    aass = list()
+    aass.append(AuthorsAffiliationSettings(name="ISNI",scheme="ISNI",url="http://www.isni.org/isni/##"))
+    aass.append(AuthorsAffiliationSettings(name="GRID",scheme="GRID",url="https://www.grid.ac/institutes/##"))
+    aass.append(AuthorsAffiliationSettings(name="Ringgold",scheme="Ringgold"))
+    aass.append(AuthorsAffiliationSettings(name="kakenhi",scheme="kakenhi"))
+    db.session.add_all(aass)
+    db.session.commit()
+    
+    return aass
+
+@pytest.fixture()
+def file_instance(db):
+    file = FileInstance(
+        uri="/var/tmp/test_dir",
+        storage_class="S",
+        size=18,
+    )
+    db.session.add(file)
+    db.session.commit()

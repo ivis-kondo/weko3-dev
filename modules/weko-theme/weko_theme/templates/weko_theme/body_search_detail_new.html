@@ -77,10 +77,20 @@ USA. #}
                 <div ng-if="sub_data.key_value.inputType=='checkbox_list'" id="sele_[[$index]]" class="checkbox">
                   <div class="panel panel-default">
                     <div class="panel-body">
-                      <label ng-repeat="sub_check in sub_data.key_value.check_val track by $index" class="col-sm-3">
-                        <input type="checkbox" id="[[sub_data.key_value.id]]" value="[[sub_check.id]]"
-                          ng-model="sub_check.checkStus">{{_('[[sub_check.contents]]')}}　
-                      </label>
+                      <div ng-if="sub_data.key_value.limit >= load_delimiter">
+                        <div class="content_[[$index]] " when-scrolled="loadMore($index)" style="overflow-y:scroll; height:400px;">
+                          <label ng-repeat="sub_check in sub_data.key_value.check_val | limitTo:sub_data.key_value.limit track by $index " class="col-sm-3">
+                            <input type="checkbox" id="[[sub_data.key_value.id]]" value="[[sub_check.id]]"
+                              ng-model="sub_check.checkStus">{{_('[[sub_check.contents]]')}}
+                          </label>
+                        </div>
+                      </div>
+                      <div ng-if="sub_data.key_value.limit < load_delimiter">
+                        <label ng-repeat="sub_check in sub_data.key_value.check_val track by $index " class="col-sm-3">
+                          <input type="checkbox" id="[[sub_data.key_value.id]]" value="[[sub_check.id]]"
+                            ng-model="sub_check.checkStus">{{_('[[sub_check.contents]]')}}
+                        </label>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -101,14 +111,14 @@ USA. #}
                       pattern="[0-9]{4}|[0-9]{4}(0[1-9]|1[0-2])|[0-9]{4}(0[1-9]|1[0-2])(0[1-9]|[1-2][0-9]|3[0-1])"
                       class="input-sm form-control detail-search-date" name="[[sub_data.key_value.id]]_from"
                       data-provide="datepicker" id="[[sub_data.key_value.id]]_from" placeholder="yyyymmdd"
-                      data-date-format="yyyymmdd" ng-model="sub_data.key_value.inputVal_from"/>
+                      data-date-format="yyyymmdd" ng-model="sub_data.key_value.inputVal_from" ng-keyup="validateDate($event)"/>
                     <span class="input-group-addon">To</span>
                     <label for="[[sub_data.key_value.id]]_to" hidden>{{_('End Date')}}</label>
                     <input type="text"
                       pattern="[0-9]{4}|[0-9]{4}(0[1-9]|1[0-2])|[0-9]{4}(0[1-9]|1[0-2])(0[1-9]|[1-2][0-9]|3[0-1])"
                       class="input-sm form-control detail-search-date" name="[[sub_data.key_value.id]]_to"
                       data-provide="datepicker" id="[[sub_data.key_value.id]]_to" placeholder="yyyymmdd"
-                      data-date-format="yyyymmdd" ng-model="sub_data.key_value.inputVal_to" />
+                      data-date-format="yyyymmdd" ng-model="sub_data.key_value.inputVal_to" ng-keyup="validateDate($event)"/>
                   </div>
                   <p class="hidden-invalid-date-notice invalid-date-notice-txt">
                     {{_('Field does not validate')}}

@@ -46,6 +46,17 @@ from .proxies import current_records_rest
 from .query import es_search_factory
 from .utils import obj_or_import_string
 
+import json
+import os
+import sys
+import math
+
+from flask_security import current_user
+from flask import session
+from invenio_accounts.models import User
+from weko_redis.redis import RedisConnection
+
+from .config import RECORDS_REST_DEFAULT_TTL_VALUE
 
 def elasticsearch_query_parsing_exception_handler(error):
     """Handle query parsing exceptions from ElasticSearch."""
@@ -146,6 +157,16 @@ def create_blueprint(endpoints):
         __name__,
         url_prefix='',
     )
+    
+    @blueprint.teardown_request
+    def dbsession_clean(exception):
+        current_app.logger.debug("invenio_records_rest dbsession_clean: {}".format(exception))
+        if exception is None:
+            try:
+                db.session.commit()
+            except:
+                db.session.rollback()
+        db.session.remove()
 
     error_handlers_registry = defaultdict(dict)
     for endpoint, options in endpoints.items():
@@ -515,8 +536,8 @@ class RecordsListResource(ContentNegotiatedMethodView):
         :returns: Search result containing hits and aggregations as
                   returned by invenio-search.
         """
-        default_results_size = current_app.config.get(
-            'RECORDS_REST_DEFAULT_RESULTS_SIZE', 10)
+        # default_results_size = current_app.config.get(
+        #     'RECORDS_REST_DEFAULT_RESULTS_SIZE', 10)
         # page_no is parameters for Opensearch
         page = request.values.get('page',
                                   request.values.get('page_no', 1, type=int),
@@ -526,23 +547,287 @@ class RecordsListResource(ContentNegotiatedMethodView):
                                   request.values.get(
                                       'list_view_num', 10, type=int),
                                   type=int)
-        if page * size >= self.max_result_window:
-            raise MaxResultWindowRESTError()
+
+        # if page * size >= self.max_result_window:
+        #     raise MaxResultWindowRESTError()
 
         # Arguments that must be added in prev/next links
         urlkwargs = dict()
         search_obj = self.search_class()
         search = search_obj.with_preference_param().params(version=True)
-        search = search[(page - 1) * size:page * size]
 
+        # this line of code will process the query string and as a result
+        # will put the correct "total" and "hits" into the search variable
         search, qs_kwargs = self.search_factory(search)
+
+        from flask_security import current_user
+        from flask import session
+        from invenio_accounts.models import User
+
         query = request.values.get('q')
+
+        # Search_after trigger
+        use_search_after = False
+
+        def get_item_sort_value(search_result):
+            return list(search_result["hits"]["hits"][-1]["sort"])
+        
+        def set_sort_value(sort_condition, sort_value):
+            
+            sort_fields = [list(condition.keys())[0] for condition in sort_condition]
+            new_data = {}
+            for i, field in enumerate(sort_fields):
+                sort_field = ""
+                if field == "_script":
+                    target_script = sort_condition[i][field].get("script") \
+                        if isinstance(sort_condition[i][field].get("script"),str) else sort_condition[i][field].get("script",{}).get("source","")
+                    if "control_number" in target_script:
+                        sort_field = "control_number"
+                    if "date_range" in target_script:
+                        sort_field = "date_range"
+                else:
+                    sort_field=field
+                new_data[sort_field] = sort_value[i]
+
+            return new_data
+        
+        def get_new_search_after(_page, search_after_size, cache_data, search_query, last_sort_value, first_page_over_max_results, sort_condition):
+            
+            conn_num = ""
+            # The first page whose page*size is greater than max_result_window
+            page_list = []
+            is_error = False
+            for cached_page in cache_data.keys():
+                try:
+                    page_list.append(int(cached_page))
+                except ValueError:
+                    # This exception is for excluding non numerical values
+                    current_app.logger.error(f"{cached_page}: {e}")
+                    current_app.logger.error(traceback.format_exc())
+                    pass
+                except:
+                    current_app.logger.error('An error occurred besides the possibly expected KeyError')
+                    current_app.logger.error(traceback.format_exc())
+            sorted_page_list = sorted(page_list)
+            if _page in sorted_page_list and cache_data.get(str(_page),{}):
+                next_items_sort_value = list(cache_data.get(str(_page),{}).values())
+            else:
+                try:
+                    if _page == first_page_over_max_results:
+                        next_items_sort_value = last_sort_value
+                    else:
+                        if (_page-1) in sorted_page_list and cache_data.get(str(_page-1)):
+                            conn_num = list(cache_data.get(str(_page-1),{}).values())
+                            next_search_after_set = search_query
+                            next_search_after_set._extra.update(search_after_size)
+                            next_search_after_set._extra.update({"search_after": conn_num})
+                            next_items_sort_value = get_item_sort_value(next_search_after_set.execute(ignore_cache=True))
+                        else:
+                            prev_page_last_control_number = (size*(page-1)-size*math.floor(self.max_result_window/size))
+                            num_per_max = prev_page_last_control_number//self.max_result_window
+                            target_index=prev_page_last_control_number%self.max_result_window
+                            if target_index==0:
+                                target_index=self.max_result_window
+                            else:
+                                num_per_max+=1
+
+                            max_size_sort_value, max_cache_data = get_max_result_sort_value(num_per_max, search, sort_condition)
+                            next_search_after_set = search_query
+                            next_search_after_set._extra.update({"size": target_index})
+                            next_search_after_set._extra.update({"search_after": max_size_sort_value})
+                            next_items_sort_value = get_item_sort_value(next_search_after_set.execute(ignore_cache=True))
+                except Exception as e:
+                    current_app.logger.error(traceback.format_exc())
+                    next_items_sort_value = last_sort_value
+                    is_error = True
+
+            if is_error != True and str(_page) not in cache_data:
+                cache_data[str(_page)] = set_sort_value(sort_condition, next_items_sort_value)
+            return next_items_sort_value, cache_data
+
+        def get_max_result_sort_value(max_size_key, search, sort_condition, max_cache_data=None):
+            """Get search_after used to search max_size_key*max_result_window ~ (max_size_key+1)*max_result_window"""
+            max_size_cache_name = f"{cache_name}_max_result"
+            if max_cache_data is None:
+                max_cache_data = json.loads(sessionstorage.get(max_size_cache_name)) \
+                    if sessionstorage.redis.exists(max_size_cache_name) else {}
+            if max_cache_data.get(str(max_size_key)):
+                new_sort_value = list(max_cache_data.get(str(max_size_key),{}).values())
+            else:
+                last_sort_value, max_cache_data = get_max_result_sort_value(max_size_key-1, search, sort_condition, max_cache_data=max_cache_data)
+
+                max_result_search = search
+                max_result_search._extra.update({"size": self.max_result_window})
+                max_result_search._extra.update({"search_after": last_sort_value})
+                new_sort_value = get_item_sort_value(max_result_search.execute(ignore_cache=True))
+                max_cache_data[str(max_size_key)] = set_sort_value(sort_condition, new_sort_value)
+                sessionstorage.put(
+                    max_size_cache_name,
+                    json.dumps(max_cache_data).encode('utf-8'),
+                    ttl_secs=current_app.config.get(
+                        'RECORDS_REST_DEFAULT_TTL_VALUE',
+                        RECORDS_REST_DEFAULT_TTL_VALUE
+                    )
+                )
+
+            return new_sort_value, max_cache_data
+
+
+        # Sort key being used in the query
+        relevance_sort_is_used = False
+        try:
+            sort_element = search.to_dict()["sort"]
+        except KeyError:
+            # Since "relevance" sort type has no "sort" key, it will produce a "KeyError"
+            # This exception is for when sort type "relevance" is used
+            sort_element = "control_number"
+            relevance_sort_is_used = True
+        
+        if relevance_sort_is_used:
+            sort_key = sort_element
+        else:
+            sort_key = list(sort_element[0].keys())[0]
+
+        # Cache Storage
+        redis_connection = RedisConnection()
+        sessionstorage = redis_connection.connection(db=current_app.config['ACCOUNTS_SESSION_REDIS_DB_NO'], kv = True)
+
+        # For saving current user to session storage for seach_after use as cache name
+        if current_user.is_authenticated:
+            cache_name = User.query.get(current_user.id).email
+        else:
+            cache_name = "anonymous_user"
+        
+        # For saving a specific page for search_after use as cache key
+        cache_key = str(page)
+
+        # For checking search results option changes and resetting cache upon option change
+        def url_args_check():
+            if sessionstorage.redis.exists(f"{cache_name}_url_args"):
+                cache_name_url_args = json.loads(sessionstorage.get(f"{cache_name}_url_args"))
+                q_check = cache_name_url_args.get("q") != request.args.to_dict().get("q")
+                sort_check = cache_name_url_args.get("sort") != request.args.to_dict().get("sort")
+                size_check = cache_name_url_args.get("size") != request.args.to_dict().get("size")
+
+                if (q_check or sort_check) or size_check:
+                    sessionstorage.delete(cache_name)
+                    sessionstorage.delete(f"{cache_name}_url_args")
+                    sessionstorage.delete(f"{cache_name}_max_result")
+                    json_data = json.dumps(request.args.to_dict()).encode('utf-8')
+                    sessionstorage.put(
+                        f"{cache_name}_url_args",
+                        json_data,
+                        ttl_secs=current_app.config.get(
+                            'RECORDS_REST_DEFAULT_TTL_VALUE',
+                            RECORDS_REST_DEFAULT_TTL_VALUE
+                        )
+                    )
+            else:
+                if sessionstorage.redis.exists(cache_name):
+                    sessionstorage.delete(cache_name)
+                if sessionstorage.redis.exists(f"{cache_name}_max_result"):
+                    sessionstorage.delete(f"{cache_name}_max_result")
+                json_data = json.dumps(request.args.to_dict()).encode('utf-8')
+                sessionstorage.put(
+                    f"{cache_name}_url_args",
+                    json_data,
+                    ttl_secs=current_app.config.get(
+                        'RECORDS_REST_DEFAULT_TTL_VALUE',
+                        RECORDS_REST_DEFAULT_TTL_VALUE
+                    )
+                )
+        
+        url_args_check()
+        next_items_sort_value = []
+        if page * size > self.max_result_window:
+            if "sort" not in search.to_dict():
+                from .sorter import eval_field
+                search_index=search._index[0]
+                control_number_sort_option = current_app.config['RECORDS_REST_SORT_OPTIONS'].get(search_index,{}).get('controlnumber')
+                if control_number_sort_option is not None:
+                    search._extra.update({"sort": [
+                        eval_field(
+                            control_number_sort_option['fields'][0],'asc',control_number_sort_option.get('nested')
+                        )
+                    ]})
+            page_value = size*((math.floor(self.max_result_window/size)+1)-1)
+            start_value=page_value-1
+            end_value=page_value
+            search_after_start_value = search[start_value:end_value]
+            search_after_start_value = search_after_start_value.execute()
+            last_sort_value = get_item_sort_value(search_after_start_value)
+            
+            sort_condition=search.to_dict().get("sort")
+
+            #sort_fields = [list(condition.keys())[0] for condition in sort_condition]
+            
+            if not sessionstorage.redis.exists(f"{cache_name}_max_result"):
+                sessionstorage.put(
+                    f"{cache_name}_max_result",
+                    json.dumps({"1": set_sort_value(sort_condition, last_sort_value)}).encode('utf-8'),
+                    ttl_secs=current_app.config.get(
+                        'RECORDS_REST_DEFAULT_TTL_VALUE',
+                        RECORDS_REST_DEFAULT_TTL_VALUE
+                    )
+                )
+
+            # Size for search. Dynamically changes depending on the size selected on the search results page
+            search_after_size = {"size": size}
+
+            next_items_sort_value = None
+
+            if sessionstorage.redis.exists(cache_name):
+                cache_data = json.loads(sessionstorage.get(cache_name))
+            else:
+                cache_data = {}
+            first_page_over_max_results = math.floor(self.max_result_window/size)+1
+
+            next_items_sort_value, cache_data = get_new_search_after(page, search_after_size, cache_data, search, last_sort_value, first_page_over_max_results, sort_condition)
+            json_data = json.dumps(cache_data).encode('utf-8')
+            sessionstorage.put(
+                cache_name,
+                json_data,
+                ttl_secs=current_app.config.get(
+                    'RECORDS_REST_DEFAULT_TTL_VALUE',
+                    RECORDS_REST_DEFAULT_TTL_VALUE
+                )
+            )
+
+            if sessionstorage.redis.exists(cache_name):
+                if json.loads(sessionstorage.get(cache_name)).get(cache_key):
+                    next_items_search_after = {"search_after": list(json.loads(sessionstorage.get(cache_name)).get(cache_key).values())}
+                else:
+                    next_items_search_after = {"search_after": next_items_sort_value}
+            else:
+                next_items_search_after = {"search_after": next_items_sort_value}
+            search._extra.update(search_after_size)
+            search._extra.update(next_items_search_after)
+
+            # Search after trigger set to true
+            use_search_after = True
+
+        if use_search_after:
+            search = search[0:size]
+        else:
+            search = search[(page - 1) * size:page * size]
+            use_search_after = False
+
         if query:
             urlkwargs['q'] = query
 
-        # current_app.logger.debug(search.to_dict())
         # Execute search
         search_result = search.execute()
+
+        if not sessionstorage.redis.exists(cache_name) and size * math.floor(self.max_result_window/size) <= self.max_result_window:
+            json_data = json.dumps({cache_key: next_items_sort_value}).encode('utf-8')
+            sessionstorage.put(
+                cache_name,
+                json_data,
+                ttl_secs=current_app.config.get(
+                    'RECORDS_REST_DEFAULT_TTL_VALUE',
+                    RECORDS_REST_DEFAULT_TTL_VALUE
+                )
+            )
 
         # Generate links for prev/next
         urlkwargs.update(
@@ -557,10 +842,11 @@ class RecordsListResource(ContentNegotiatedMethodView):
         if size * page < search_result.hits.total and \
                 size * page < self.max_result_window:
             links['next'] = url_for(endpoint, page=page + 1, **urlkwargs)
-
+        from weko_search_ui.utils import combine_aggs
+        search_result = combine_aggs(search_result.to_dict())
         return self.make_response(
             pid_fetcher=self.pid_fetcher,
-            search_result=search_result.to_dict(),
+            search_result=search_result,
             links=links,
             item_links_factory=self.item_links_factory,
         )
@@ -602,27 +888,33 @@ class RecordsListResource(ContentNegotiatedMethodView):
         if permission_factory:
             verify_record_permission(permission_factory, data)
 
-        # Create uuid for record
-        record_uuid = uuid.uuid4()
-        # Create persistent identifier
-        pid = self.minter(record_uuid, data=data)
-        # Create record
-        record = self.record_class.create(data, id_=record_uuid)
+        try:
+            # Create uuid for record
+            record_uuid = uuid.uuid4()
+            # Create persistent identifier
+            pid = self.minter(record_uuid, data=data)
+            # Create record
+            record = self.record_class.create(data, id_=record_uuid)
 
-        db.session.commit()
+            db.session.commit()
 
-        # Index the record
-        if self.indexer_class:
-            self.indexer_class().index(record)
+            # Index the record
+            if self.indexer_class:
+                self.indexer_class().index(record)
 
-        response = self.make_response(
-            pid, record, 201, links_factory=self.item_links_factory)
+            response = self.make_response(
+                pid, record, 201, links_factory=self.item_links_factory)
 
-        # Add location headers
-        endpoint = '.{0}_item'.format(
-            current_records_rest.default_endpoint_prefixes[pid.pid_type])
-        location = url_for(endpoint, pid_value=pid.pid_value, _external=True)
-        response.headers.extend(dict(location=location))
+            # Add location headers
+            endpoint = '.{0}_item'.format(
+                current_records_rest.default_endpoint_prefixes[pid.pid_type])
+            location = url_for(endpoint, pid_value=pid.pid_value, _external=True)
+            response.headers.extend(dict(location=location))
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(e)
+            response = self.make_response(None, None, 500)
+        
         return response
 
 
@@ -680,18 +972,23 @@ class RecordResource(ContentNegotiatedMethodView):
         """
         self.check_etag(str(record.model.version_id))
 
-        record.delete()
-        # mark all PIDs as DELETED
-        all_pids = PersistentIdentifier.query.filter(
-            PersistentIdentifier.object_type == pid.object_type,
-            PersistentIdentifier.object_uuid == pid.object_uuid,
-        ).all()
-        for rec_pid in all_pids:
-            if not rec_pid.is_deleted():
-                rec_pid.delete()
-        db.session.commit()
-        if self.indexer_class:
-            self.indexer_class().delete(record)
+        try:
+            record.delete()
+            # mark all PIDs as DELETED
+            all_pids = PersistentIdentifier.query.filter(
+                PersistentIdentifier.object_type == pid.object_type,
+                PersistentIdentifier.object_uuid == pid.object_uuid,
+            ).all()
+            for rec_pid in all_pids:
+                if not rec_pid.is_deleted():
+                    rec_pid.delete()
+            db.session.commit()
+
+            if self.indexer_class:
+                self.indexer_class().delete(record)
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(e)
 
         return '', 204
 
@@ -753,14 +1050,19 @@ class RecordResource(ContentNegotiatedMethodView):
 
         self.check_etag(str(record.revision_id))
         try:
-            record = record.patch(data)
-        except (JsonPatchException, JsonPointerException):
-            raise PatchJSONFailureRESTError()
+            try:
+                record = record.patch(data)
+            except (JsonPatchException, JsonPointerException):
+                raise PatchJSONFailureRESTError()
 
-        record.commit()
-        db.session.commit()
-        if self.indexer_class:
-            self.indexer_class().index(record)
+            record.commit()
+            db.session.commit()
+
+            if self.indexer_class:
+                self.indexer_class().index(record)
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(e)
 
         return self.make_response(
             pid, record, links_factory=self.links_factory)
@@ -799,15 +1101,39 @@ class RecordResource(ContentNegotiatedMethodView):
 
         try:
             current_app.logger.debug(type(record))
+            role_ids = []
+            can_edit_indexes = []
+            if current_user and current_user.is_authenticated:
+                for role in current_user.roles:
+                    if role.name in current_app.config['WEKO_PERMISSION_SUPER_ROLE_USER']:
+                        role_ids = []
+                        break
+                    else:
+                        role_ids.append(role.id)
+            if role_ids:
+                from invenio_communities.models import Community
+                from weko_index_tree.api import Indexes
+
+                comm_list = Community.query.filter(
+                    Community.id_role.in_(role_ids)
+                ).all()
+                for comm in comm_list:
+                    for index in Indexes.get_self_list(comm.root_node_id):
+                        if index.cid not in can_edit_indexes:
+                            can_edit_indexes.append(str(index.cid))
+                path = record.get('path', [])
+                data['index'] = list(set(path) - set(can_edit_indexes)) + data.get('index', [])
             record.clear()
             record.update(data)
             record.commit()
             db.session.commit()
+
+            if self.indexer_class:
+                self.indexer_class().index(record)
         except BaseException as e:
+            db.session.rollback()
             current_app.logger.error(traceback.format_exc())
 
-        if self.indexer_class:
-            self.indexer_class().index(record)
         return self.make_response(
             pid, record, links_factory=self.links_factory)
 

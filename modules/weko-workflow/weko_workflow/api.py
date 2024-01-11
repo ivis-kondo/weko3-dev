@@ -21,9 +21,11 @@
 """WEKO3 module docstring."""
 
 import math
+from typing import List
 import urllib.parse
 import uuid
-from datetime import datetime, timedelta
+import traceback
+from datetime import date,datetime, timedelta
 
 from flask import abort, current_app, request, session, url_for
 from flask_login import current_user
@@ -35,6 +37,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm.exc import NoResultFound
 from weko_deposit.api import WekoDeposit
 from weko_records.serializers.utils import get_item_type_name
+from weko_schema_ui.models import PublishStatus
+from weko_index_tree.api import Indexes
 
 from .config import IDENTIFIER_GRANT_LIST, IDENTIFIER_GRANT_SUFFIX_METHOD, \
     WEKO_WORKFLOW_ALL_TAB, WEKO_WORKFLOW_TODO_TAB, WEKO_WORKFLOW_WAIT_TAB
@@ -49,6 +53,7 @@ from .models import FlowDefine as _Flow
 from .models import FlowStatusPolicy
 from .models import WorkFlow as _WorkFlow
 from .models import WorkflowRole
+from .models import ActivityCount
 
 
 class Flow(object):
@@ -350,6 +355,19 @@ class Flow(object):
             flow_action = _FlowAction.query.filter_by(
                 flow_id=flow_id,
                 action_id=action_id).all()
+            return flow_action
+    
+    def get_flow_action_list(self, flow_define_id :int) -> List[_FlowAction]:
+        """ get workflow_flow_action from workflow_workflow.flow_id 
+            Args:
+                flow_define_id : int  workflow_workflow.flow_id 
+            Eeturns:
+                record list of workflow_flow_action
+        """
+        with db.session.no_autoflush:
+            flow_def = _Flow.query.filter_by(id=flow_define_id).first()
+            flow_action = _FlowAction.query.filter_by(
+                flow_id=flow_def.flow_id).order_by(asc(_FlowAction.action_order)).all()
             return flow_action
 
 
@@ -717,7 +735,7 @@ class WorkActivity(object):
                 workflow_id=activity.get('workflow_id'),
                 flow_id=activity.get('flow_id'),
                 action_id=next_action_id,
-                action_status=ActionStatusPolicy.ACTION_BEGIN,
+                action_status=ActionStatusPolicy.ACTION_DOING,
                 activity_login_user=activity_login_user,
                 activity_update_user=activity_update_user,
                 activity_status=ActivityStatusPolicy.ACTIVITY_MAKING,
@@ -762,10 +780,13 @@ class WorkActivity(object):
                             flow_action.action_id)
                         action_handler = activity_login_user \
                             if not action.action_endpoint == 'approval' else -1
+                        action_status = ActionStatusPolicy.ACTION_DOING \
+                            if flow_action.action_id == next_action_id \
+                            else ActionStatusPolicy.ACTION_DONE
                         db_activity_action = ActivityAction(
                             activity_id=db_activity.activity_id,
                             action_id=flow_action.action_id,
-                            action_status=ActionStatusPolicy.ACTION_DONE,
+                            action_status=action_status,
                             action_handler=action_handler,
                             action_order=flow_action.action_order
                         )
@@ -781,44 +802,50 @@ class WorkActivity(object):
 
         :return: activity ID.
         """
-        # Table lock for calculate new activity id
-        if db.get_engine().driver!='pysqlite':
-            db.session.execute(
-                'LOCK TABLE ' + _Activity.__tablename__ + ' IN EXCLUSIVE MODE')
+        number = 1
+        try:
+            # Table lock for calculate new activity id
+            if db.get_engine().driver!='pysqlite':
+                db.session.execute(
+                    'LOCK TABLE ' + ActivityCount.__tablename__ + ' IN EXCLUSIVE MODE')
 
-        # Calculate activity_id based on id
-        utc_now = datetime.utcnow()
-        current_date_start = utc_now.strftime("%Y-%m-%d 00:00:00")
-        next_date_start = (utc_now + timedelta(1)).\
-            strftime("%Y-%m-%d 00:00:00")
+            # Calculate activity_id based on id
+            utc_now = datetime.utcnow()
+            current_date = utc_now.strftime("%Y-%m-%d")       
+            today_count = ActivityCount.query.filter_by(date=current_date).one_or_none()
+            # Cannot use '.with_for_update()'. FOR UPDATE is not allowed 
+            # with aggregate functions
 
-        max_id = db.session.query(func.count(_Activity.id)).filter(
-            _Activity.created >= '{}'.format(current_date_start),
-            _Activity.created < '{}'.format(next_date_start),
-        ).scalar()  
-        # Cannot use '.with_for_update()'. FOR UPDATE is not allowed 
-        # with aggregate functions
-
-        if max_id:
-            # Calculate aid
-            number = max_id + 1
-            if number > 99999:
-                raise IndexError('The number is out of range \
-                    (maximum is 99999, current is {}'.format(number))
-        else:
-            # The default activity Id of the current day
-            number = 1
+            if today_count:
+                # Calculate aid
+                number = today_count.activity_count + 1
+                if number > current_app.config['WEKO_WORKFLOW_MAX_ACTIVITY_ID']:
+                    raise IndexError('The number is out of range \
+                        (maximum is {}, current is {}'.format(current_app.config['WEKO_WORKFLOW_MAX_ACTIVITY_ID'],number))
+                today_count.activity_count = number          
+            else:
+                # The default activity Id of the current day
+                _activty_count = ActivityCount(date=current_date, activity_count=number)
+                db.session.add(_activty_count)
+                prev_counts = ActivityCount.query.filter(ActivityCount.date<current_date).all()
+                if prev_counts:
+                    for prev_count in prev_counts:
+                        db.session.delete(prev_count)
+        except SQLAlchemyError as ex:
+            raise ex
+        except IndexError as ex:
+            raise ex          
 
         # Activity Id's format
         activity_id_format = current_app.\
             config['WEKO_WORKFLOW_ACTIVITY_ID_FORMAT']
 
         # A-YYYYMMDD-NNNNN (NNNNN starts from 00001)
-        datetime_str = utc_now.strftime("%Y%m%d")
+        date_str = utc_now.strftime("%Y%m%d")
 
         # Define activity Id of day
         return activity_id_format.format(
-            datetime_str,
+            date_str,
             '{inc:05d}'.format(inc=number))
 
     def upt_activity_agreement_step(self, activity_id, is_agree):
@@ -846,10 +873,14 @@ class WorkActivity(object):
         try:
             with db.session.begin_nested():
                 activity = self.get_activity_by_id(activity_id)
-                activity.action_id = action_id
-                activity.action_status = action_status
-                if action_order:
-                    activity.action_order = action_order
+                if activity.activity_status not in [
+                    ActivityStatusPolicy.ACTIVITY_CANCEL
+                ]:
+                    current_app.logger.debug("change action_status")
+                    activity.action_id = action_id
+                    activity.action_status = action_status
+                    if action_order:
+                        activity.action_order = action_order
                 db.session.merge(activity)
             db.session.commit()
             return True
@@ -1685,15 +1716,43 @@ class WorkActivity(object):
                     )
                 )
         return common_query
-
+    
     @staticmethod
-    def __format_activity_data_to_show_on_workflow(activities,
-                                                   action_activities):
+    def _check_community_permission(activity_data, index_ids):
+        flag = False
+        if activity_data.item_id:
+            dep = WekoDeposit.get_record(activity_data.item_id)
+            path = dep.get('path', [])
+            for i in path:
+                if str(i) in index_ids:
+                    flag = True
+                    break
+        return flag
+
+    def __format_activity_data_to_show_on_workflow(self, activities,
+                                                   action_activities,
+                                                   is_community_admin):
         """Format activity data to show on Workflow.
 
         @param activities:
         @param action_activities:
+        @param is_community_admin:
         """
+
+        index_ids = []
+        if is_community_admin:
+            role_ids = []
+            if current_user and current_user.is_authenticated:
+                role_ids = [role.id for role in current_user.roles]
+            if role_ids:
+                from invenio_communities.models import Community
+                comm_list = Community.query.filter(
+                    Community.id_role.in_(role_ids)
+                ).all()
+                for comm in comm_list:
+                    index_ids += [str(i.cid) for i in Indexes.get_self_list(comm.root_node_id)
+                                  if i.cid not in index_ids]
+
         for activity_data, last_update_user, \
             flow_name, action_name, role_name \
                 in action_activities:
@@ -1708,11 +1767,14 @@ class WorkActivity(object):
             else:
                 activity_data.StatusDesc = ActionStatusPolicy.describe(
                     ActionStatusPolicy.ACTION_DOING)
-
             activity_data.email = last_update_user
             activity_data.flows_name = flow_name
             activity_data.action_name = action_name
             activity_data.role_name = role_name if role_name else ''
+
+            if is_community_admin:
+                if not self._check_community_permission(activity_data, index_ids):
+                    continue
             # Append to do and action activities into the master list
             activities.append(activity_data)
 
@@ -1738,7 +1800,7 @@ class WorkActivity(object):
         return community_user_ids
 
     def get_activity_list(self, community_id=None, conditions=None,
-                          is_get_all=False):
+                          is_get_all=False, activitylog = False):
         """Get activity list info.
 
         Args:
@@ -1813,6 +1875,10 @@ class WorkActivity(object):
             query_action_activities = self.filter_conditions(
                 conditions, query_action_activities)
 
+            if activitylog:
+                page = 1
+                size = current_app.config.get("WEKO_WORKFLOW_ACTIVITYLOG_BULK_MAX")
+
             # Count all result
             count = query_action_activities.distinct(_Activity.id).count()
             max_page = math.ceil(count / int(size))
@@ -1820,13 +1886,13 @@ class WorkActivity(object):
             if count > 0:
                 name_param, page = self.__get_activity_list_per_page(
                     activities, max_page, name_param, page,
-                    query_action_activities, size, tab, is_get_all
+                    query_action_activities, size, tab, is_community_admin, is_get_all
                 )
             return activities, max_page, size, page, name_param
 
     def __get_activity_list_per_page(
         self, activities, max_page, name_param,
-        page, query_action_activities, size, tab, is_get_all=False
+        page, query_action_activities, size, tab, is_community_admin, is_get_all=False
     ):
         """Get activity list per page.
 
@@ -1853,7 +1919,7 @@ class WorkActivity(object):
         if action_activities:
             # Format activities
             self.__format_activity_data_to_show_on_workflow(
-                activities, action_activities)
+                activities, action_activities, is_community_admin)
         return name_param, page
 
     def get_all_activity_list(self, community_id=None):
@@ -2242,7 +2308,7 @@ class WorkActivity(object):
             db.session.commit()
         except Exception as ex:
             db.session.rollback()
-            current_app.logger.error(ex)
+            current_app.logger.error(traceback.format_exc())
             raise ex
 
     @staticmethod
@@ -2654,17 +2720,17 @@ class UpdateItem(object):
         from weko_deposit.api import WekoIndexer
         publish_status = record.get('publish_status')
         if not publish_status:
-            record.update({'publish_status': '0'})
+            record.update({'publish_status': PublishStatus.PUBLIC.value})
         else:
-            record['publish_status'] = '0'
+            record['publish_status'] = PublishStatus.PUBLIC.value
 
         record.commit()
         db.session.commit()
 
         indexer = WekoIndexer()
-        indexer.update_publish_status(record)
+        indexer.update_es_data(record, update_revision=False, field='publish_status')
 
-    def update_status(self, record, status='1'):
+    def update_status(self, record, status=PublishStatus.PRIVATE.value):
         r"""Record update status.
 
         :param pid: PID object.
@@ -2682,7 +2748,7 @@ class UpdateItem(object):
         db.session.commit()
 
         indexer = WekoIndexer()
-        indexer.update_publish_status(record)
+        indexer.update_es_data(record, update_revision=False, field='publish_status')
 
     def set_item_relation(self, relation_data, record):
         """Set relation info of item.

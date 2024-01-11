@@ -32,6 +32,9 @@ WEKO_WORKFLOW_OAPOLICY_SEARCH = 'oa_policy_{keyword}'
 WEKO_WORKFLOW_OAPOLICY_CACHE_TTL = 24 * 60 * 60
 """ cache default timeout 1 day"""
 
+WEKO_WORKFLOW_MAX_ACTIVITY_ID = 99999
+""" max activity id per day"""
+
 WEKO_WORKFLOW_ACTIVITY_ID_FORMAT = 'A-{}-{}'
 """Activity Id's format (A-YYYYMMDD-NNNNN with NNNNN starts from 00001)."""
 
@@ -80,8 +83,169 @@ IDENTIFIER_GRANT_SELECT_DICT = {
 """Identifier grant selected enum."""
 
 DOI_VALIDATION_INFO = {
+    'jpcoar:URI': [
+        ['file.URI.@value', None]
+    ],
+    'dc:title': [
+        ['title.@value', None],
+        # ['title.@attributes.xml:lang', None]
+    ],
+    'datacite:date': [
+        ['date.@value', None],
+         ['date.@attributes.dateType', None]
+    ],
+    'dc:type': [
+        ['type.@attributes.rdf:resource', None],
+        ['type.@value', None],
+    ],
+    'jpcoar:pageStart': [
+        ['pageStart.@value', None],
+    ],
+    'dcndl:dateGranted': [
+        ['dateGranted.@value', None],
+    ],
+    'jpcoar:degreeGrantor': [
+        ['degreeGrantor.nameIdentifier.@attributes.nameIdentifierScheme', None],
+        ['degreeGrantor.nameIdentifier.@value', None],
+        ['degreeGrantor.degreeGrantorName.@attributes.xml:lang', None],
+        ['degreeGrantor.degreeGrantorName.@value', None],
+    ],
+    'jpcoar:givenName': [
+        ['creator.givenName.@value', None],
+        # ['creator.givenName.@attributes.xml:lang', None]
+    ],
+    'jpcoar:creatorName': [
+        ['creator.creatorName.@value', None],
+        # ['creator.creatorName.@attributes.xml:lang', None]
+    ],
+    'jpcoar:sourceIdentifier': [
+        ['sourceIdentifier.@value', None],
+        ['sourceIdentifier.@attributes.identifierType', None]
+    ],
+    'jpcoar:sourceTitle': [
+        ['sourceTitle.@value', None],
+        ['sourceTitle.@attributes.xml:lang', None]
+    ],
+    'dc:publisher': [
+        ['publisher.@value', None],
+        # ['publisher.@attributes.xml:lang', None]
+    ],
+    'jpcoar:publisher_jpcoar': [
+        ['publisher_jpcoar.publisherName.@value', None],
+        # ['publisher_jpcoar.publisherName.@attributes.xml:lang', None],
+    ],
+    'datacite:geoLocationPoint': [
+        ['geoLocation.geoLocationPoint.pointLatitude.@value', None],
+        ['geoLocation.geoLocationPoint.pointLongitude.@value', None]
+    ],
+    'datacite:geoLocationBox': [
+        ['geoLocation.geoLocationBox.eastBoundLongitude.@value', None],
+        ['geoLocation.geoLocationBox.northBoundLatitude.@value', None],
+        ['geoLocation.geoLocationBox.southBoundLatitude.@value', None],
+        ['geoLocation.geoLocationBox.westBoundLongitude.@value', None]
+    ],
+    'datacite:geoLocationPlace': [
+        ['geoLocation.geoLocationPlace.@value', None]
+    ],
+    'jpcoar:mimeType': [
+        ['file.mimeType.@value', None]
+    ],
+    'datacite:version': [
+        ['version.@value', None]
+    ],
+    'oaire:version': [
+        ['versiontype.@value', None],
+        ['versiontype.@attributes.rdf:resource', None]
+    ]
+}
+DOI_VALIDATION_INFO_CROSSREF = {
+    'jpcoar:URI': [
+        ['file.URI.@value', None]
+    ],
+    'dc:title': [
+        ['title.@value', None],
+        ['title.@attributes.xml:lang', None]
+    ],
+    'datacite:date': [
+        # ['date.@attributes.dateType', None],
+        ['date.@value', None]
+    ],
+    'dc:type': [
+        ['type.@attributes.rdf:resource', None],
+        ['type.@value', None],
+    ],
+    'jpcoar:pageStart': [
+        ['pageStart.@value', None],
+    ],
+    'dcndl:dateGranted': [
+        ['dateGranted.@value', None],
+    ],
+    'jpcoar:givenName': [
+        ['creator.givenName.@value', None],
+        ['creator.givenName.@attributes.xml:lang', None]
+    ],
+    'jpcoar:creatorName': [
+        ['creator.creatorName.@value', None],
+        ['creator.creatorName.@attributes.xml:lang', None]
+    ],
+    'jpcoar:sourceIdentifier': [
+        ['sourceIdentifier.@value', None],
+        ['sourceIdentifier.@attributes.identifierType', None]
+    ],
+    'jpcoar:sourceTitle': [
+        ['sourceTitle.@value', None],
+        ['sourceTitle.@attributes.xml:lang', 'en']
+    ],
+    'dc:publisher': [
+        ['publisher.@value', None],
+        ['publisher.@attributes.xml:lang', 'en']
+    ],
+    'jpcoar:publisher_jpcoar': [
+        ['publisher_jpcoar.publisherName.@value', None],
+        ['publisher_jpcoar.publisherName.@attributes.xml:lang', 'en'],
+    ],
+}
+DOI_VALIDATION_INFO_DATACITE = {
+    'jpcoar:URI': [
+        ['file.URI.@value', None]
+    ],
+    'dc:title': [
+        ['title.@value', None],
+        ['title.@attributes.xml:lang', None]
+    ],
+    'datacite:date': [
+        ['date.@attributes.dateType', None],
+        ['date.@value', None]
+    ],
+    'dc:type': [
+        ['type.@attributes.rdf:resource', None],
+        ['type.@value', None],
+    ],
+    'dcndl:dateGranted': [
+        ['dateGranted.@value', None],
+    ],
+    'jpcoar:givenName': [
+        ['creator.givenName.@value', None],
+        ['creator.givenName.@attributes.xml:lang', 'en']
+    ],
+    'jpcoar:creatorName': [
+        ['creator.creatorName.@value', None],
+        ['creator.creatorName.@attributes.xml:lang', 'en']
+    ],
+    'dc:publisher': [
+        ['publisher.@value', None],
+        ['publisher.@attributes.xml:lang', 'en']
+    ],
+    'jpcoar:publisher_jpcoar': [
+        ['publisher_jpcoar.publisherName.@value', None],
+        ['publisher_jpcoar.publisherName.@attributes.xml:lang', 'en'],
+    ],
+}
+"""List of DOI validation information."""
+
+DOI_VALIDATION_INFO_JALC = {
     'jpcoar:URI': [['file.URI.@value', None]],
-    'dc:title': [['title.@value', None], ['title.@attributes.xml:lang', None]],
+    'dc:title': [['title.@value', None]],
     'jpcoar:givenName': [['creator.givenName.@value', None]],
     'jpcoar:sourceIdentifier': [
         ['sourceIdentifier.@value', None],
@@ -106,8 +270,6 @@ DOI_VALIDATION_INFO = {
     'oaire:version': [['versiontype.@value', None],
                       ['versiontype.@attributes.rdf:resource', None]]
 }
-"""List of DOI validation information."""
-
 WEKO_SERVER_CNRI_HOST_LINK = 'http://hdl.handle.net/'
 """Host server of CNRI"""
 
@@ -339,3 +501,43 @@ WEKO_WORKFLOW_GAKUNINRDM_DATA = [
 
 WEKO_WORKFLOW_GAKUNINRDM_PREFIX = 'GakuninRDM'
 """GekuninRDM prefix for logging."""
+
+WEKO_WORKFLOW_ACTIVITYLOG_ROLE_ENABLE = ["System Administrator","Repository Administrator"]
+""" Roles that can output activitylog"""
+
+WEKO_WORKFLOW_ACTIVITYLOG_BULK_MAX = 100000
+""" Maximum activitylog output at one time"""
+
+WEKO_WORKFLOW_ACTIVITYLOG_XLS_COLUMNS = [
+    'activity_start',
+    'workflow_id',
+    'approval2',
+    'status',
+    'activity_end',
+    'workflow_status',
+    'extra_info',
+    'activity_community_id',
+    'created',
+    'flow_id',
+    'action_order',
+    'updated',
+    'activity_confirm_term_of_use',
+    'action_id',
+    'id',
+    'title',
+    'action_status',
+    'activity_id',
+    'shared_user_id',
+    'activity_login_user',
+    'activity_name',
+    'temp_data',
+    'activity_update_user',
+    'item_id',
+    'approval1',
+    'activity_status',
+    'StatusDesc',
+    'email',
+    'flows_name',
+    'action_name',
+    'role_name'
+]

@@ -12,6 +12,7 @@ from __future__ import absolute_import, print_function
 
 import os
 
+from flask_babelex import get_timezone
 from kombu import Exchange
 
 from .utils import default_permission_factory, weko_permission_factory
@@ -140,7 +141,9 @@ STATS_QUERIES = {
     'get-record-view-per-site-license': {},
     'get-search-per-site-license': {},
     'get-file-download-per-site-license': {},
-    'get-file-preview-per-site-license': {}
+    'get-file-preview-per-site-license': {},
+    'get-ranking-data': {},
+    'get-new-items-data': {}
 }
 
 STATS_PERMISSION_FACTORY = weko_permission_factory
@@ -199,7 +202,7 @@ STATS_AGGREGATION_INDEXES = [
 """Stats aggregation indexes."""
 
 
-STATS_WEKO_DEFAULT_TIMEZONE = 'Asia/Tokyo'
+STATS_WEKO_DEFAULT_TIMEZONE = get_timezone
 """Bucketing should use a different time zone."""
 
 STATS_WEKO_DB_BACKUP_EVENTS = True

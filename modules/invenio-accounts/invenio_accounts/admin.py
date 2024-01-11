@@ -27,6 +27,8 @@ from werkzeug.local import LocalProxy
 from wtforms.fields import BooleanField
 from wtforms.validators import DataRequired
 
+from weko_workflow.models import WorkFlow, WorkflowRole
+
 from .cli import commit
 from .models import Role, SessionActivity, User
 from .sessions import delete_session
@@ -185,6 +187,29 @@ class RoleView(ModelView):
         'user': user_loader
     }
 
+    def after_model_change(self, form, model, is_created):
+        if is_created and current_app.config.get('ACCOUNTS_WORKFLOW_ROLE_HIDE_FILTER', False):
+            try:
+                workflows = WorkFlow.query.filter_by(
+                    is_deleted=False).all()
+                if workflows:
+                    id_list = [x.id for x in workflows]
+                    with db.session.begin_nested():
+                        for i in id_list:
+                            wfrole = dict(
+                                workflow_id=i,
+                                role_id=model.id
+                            )
+                            db.session.execute(WorkflowRole.__table__.insert(), wfrole)
+                    db.session.commit()
+            except Exception as ex:
+                current_app.logger.error(
+                    'Insert workflow_id_list: {}, role_id: {} into workflow_userrole fail.'
+                    .format(id_list, model.id)
+                )
+                current_app.logger.error(str(ex))
+                db.session.rollback()
+
 
 class SessionActivityView(ModelView):
     """Admin view for user sessions."""
@@ -212,23 +237,31 @@ class SessionActivityView(ModelView):
 
     def delete_model(self, model):
         """Delete a specific session."""
-        if SessionActivity.is_current(sid_s=model.sid_s):
-            flash('You could not remove your current session', 'error')
-            return
-        delete_session(sid_s=model.sid_s)
-        db.session.commit()
+        try:
+            if SessionActivity.is_current(sid_s=model.sid_s):
+                flash('You could not remove your current session', 'error')
+                return
+            delete_session(sid_s=model.sid_s)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(e)
 
     @action('delete', lazy_gettext('Delete selected sessions'),
             lazy_gettext('Are you sure you want to delete selected sessions?'))
     def action_delete(self, ids):
         """Delete selected sessions."""
-        is_current = any(SessionActivity.is_current(sid_s=id_) for id_ in ids)
-        if is_current:
-            flash('You could not remove your current session', 'error')
-            return
-        for id_ in ids:
-            delete_session(sid_s=id_)
-        db.session.commit()
+        try:
+            is_current = any(SessionActivity.is_current(sid_s=id_) for id_ in ids)
+            if is_current:
+                flash('You could not remove your current session', 'error')
+                return
+            for id_ in ids:
+                delete_session(sid_s=id_)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(e)
 
 
 session_adminview = {

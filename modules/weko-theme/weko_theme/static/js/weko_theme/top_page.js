@@ -190,12 +190,34 @@ require([
                 search = insertParam(search, "item_management", "delete");
                 window.location.href = "/admin/items/search" + search;
             } else {
-                window.location.href = "/search" + search;
+                window.location.href = "/search" + search + getFacetParameter();
             }
 
             // stop the form from submitting the normal way and refreshing the page
             event.preventDefault();
         })
+    }
+
+    /**
+     * Returns faceted search parameters.
+     * This function was created for the purpose of giving faceted search parameters to simple searches.
+     * Returns parameters for faceted searches from existing URLs, excluding simple, advanced, and INDEX searches.
+     * 
+     * @returns Faceted search parameters.
+     */
+    function getFacetParameter() {
+        let result = "";
+        let params = window.location.search.substring(1).split('&');
+        const conds = ['page', 'size', 'sort', 'timestamp', 'search_type', 'q', 'title', 'creator', 'date_range1_from', 'date_range1_to','time'];
+        for (let i = 0; i < params.length; i++) {
+            var keyValue = decodeURIComponent(params[i]).split('=');
+            var key = keyValue[0];
+            var value = keyValue[1];
+            if(key && !conds.includes(key) && !key.startsWith("text")) {
+                result += "&" + encodeURIComponent(key) + "=" + encodeURIComponent(value);
+            }
+        }
+        return result;
     }
 
     function insertParam(search, key, value) {
@@ -228,6 +250,35 @@ require([
 
         return data;
     }
+
+    function daysInMonth(month, year){
+        switch(month){
+            case 1:
+                return (year % 4 == 0 && year % 100) || year % 400 == 0 ? 29 : 28;
+            case 8: case 3: case 5: case 10:
+                return 30
+            default:
+                return 31
+        }
+    }
+
+    function validDate(elem){
+        const date_pattern = /([0-9]{4})(0[1-9]|1[0-2])(0[1-9]|[1-2][0-9]|3[0-1])/
+        if (elem.validity.patternMismatch){
+            return true;
+        }else{
+            const dates = elem.value.match(date_pattern)
+            if (dates){
+                const year = parseInt(dates[1])
+                const month = parseInt(dates[2],10) - 1
+                const day = parseInt(dates[3])
+                return day > daysInMonth(month, year);
+            }else{
+                return false
+            }
+        }
+    }
+
 
     $(document).ready(function () {
 
@@ -306,7 +357,7 @@ require([
             // 13はエンターキー
             if (event.which === 13) {
                 // サブミット時に無効な値が入力されていたら値をクリアする
-                if (elem.validity.patternMismatch) {
+                if (validDate(elem)){
                     elem.value = '';
                 } else {
                     $('#' + this.id).removeClass('invalid-date');
@@ -314,7 +365,7 @@ require([
                     invalidDateNoticeEl.addClass('hidden-invalid-date-notice');
                 }
             } else {
-                if (elem.validity.patternMismatch) {
+                if (validDate(elem)){
                     $('#' + this.id).addClass('invalid-date');
                     var invalidDateNoticeEl = $(this).parent().next();
                     invalidDateNoticeEl.removeClass('hidden-invalid-date-notice');

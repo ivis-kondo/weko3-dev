@@ -36,6 +36,7 @@ from werkzeug.local import LocalProxy
 from tests.helpers import create_record, json_data
 from six import BytesIO
 from elasticsearch import Elasticsearch
+from elasticsearch.exceptions import RequestError
 from simplekv.memory.redisstore import RedisStore
 # from moto import mock_s3
 
@@ -217,10 +218,10 @@ def base_app(instance_path, request):
             'test'
         ),
         INDEX_IMG='indextree/36466818-image.jpg',
-        # SQLALCHEMY_DATABASE_URI=os.getenv('SQLALCHEMY_DATABASE_URI',
-        #                                   'postgresql+psycopg2://invenio:dbpass123@postgresql:5432/invenio'),
-        SQLALCHEMY_DATABASE_URI=os.environ.get(
-            'SQLALCHEMY_DATABASE_URI', 'sqlite:///test.db'),
+        SQLALCHEMY_DATABASE_URI=os.getenv('SQLALCHEMY_DATABASE_URI',
+                                          'postgresql+psycopg2://invenio:dbpass123@postgresql:5432/wekotest'),
+        # SQLALCHEMY_DATABASE_URI=os.environ.get(
+        #     'SQLALCHEMY_DATABASE_URI', 'sqlite:///test.db'),
         SEARCH_ELASTIC_HOSTS=os.environ.get(
             'SEARCH_ELASTIC_HOSTS', 'elasticsearch'),
         SQLALCHEMY_TRACK_MODIFICATIONS=True,
@@ -675,6 +676,19 @@ def db(app):
 
 
 @pytest.yield_fixture()
+def es(app):
+    """Elasticsearch fixture."""
+    try:
+        list(current_search.create())
+    except RequestError:
+        list(current_search.delete(ignore=[404]))
+        list(current_search.create(ignore=[400]))
+    current_search_client.indices.refresh()
+    yield current_search_client
+    list(current_search.delete(ignore=[404]))
+
+
+@pytest.yield_fixture()
 def i18n_app(app):
     with app.test_request_context(
         headers=[('Accept-Language','ja')]):
@@ -1051,3 +1065,13 @@ def search_result():
     search_query_result = json_data("data/search_result.json")
 
     return search_query_result
+
+
+@pytest.fixture()
+def sample_file():
+    file_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "data",
+        "sample_file",
+        "sample_file.txt",
+    )

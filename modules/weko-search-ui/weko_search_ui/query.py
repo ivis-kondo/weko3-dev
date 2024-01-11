@@ -24,14 +24,18 @@ import json
 import re
 import sys
 from datetime import datetime
+from datetime import timezone
 from functools import partial
 
 from elasticsearch_dsl.query import Bool, Q
 from flask import current_app, request
 from flask_security import current_user
+from flask_babelex import get_timezone
 from invenio_communities.models import Community
 from invenio_records_rest.errors import InvalidQueryRESTError
 from weko_index_tree.api import Indexes
+from weko_index_tree.utils import get_user_roles
+from weko_schema_ui.models import PublishStatus
 from werkzeug.datastructures import MultiDict
 
 from . import config
@@ -60,10 +64,16 @@ def get_permission_filter(index_id: str = None):
         List: Query command.
 
     """
+    is_admin, roles = get_user_roles()
+    if is_admin:
+        pub_status = [PublishStatus.PUBLIC.value, PublishStatus.PRIVATE.value]
+    else:
+        pub_status = [PublishStatus.PUBLIC.value]
     is_perm = search_permission.can()
-    match = Q("match", publish_status="0")
+    status = Q("terms", publish_status=pub_status)
     version = Q("match", relation_version_is_last="true")
-    rng = Q("range", **{"publish_date": {"lte": "now/d"}})
+
+    rng = Q("range", **{"publish_date": {"lte": "now/d","time_zone":str(get_timezone())}})
     term_list = []
     mst = []
     is_perm_paths = Indexes.get_browsing_tree_paths()
@@ -77,38 +87,41 @@ def get_permission_filter(index_id: str = None):
             if index_id in is_perm_indexes:
                 should_path.append(Q("terms", path=index_id))
 
-            mst.append(match)
-            mst.append(rng)
             terms = Q("bool", should=should_path)
         else:  # In case search_type is keyword or index
             if index_id in is_perm_indexes:
                 term_list.append(index_id)
 
-            mst.append(match)
-            mst.append(rng)
             terms = Q("terms", path=term_list)
     else:
-        mst.append(match)
-        mst.append(rng)
         terms = Q("terms", path=is_perm_indexes)
+    
+    if is_admin:
+        mst.append(status)
+    else:
+        mst.append(status)
+        mst.append(rng)
 
     mut = []
 
     if is_perm:
-        user_id, result = check_admin_user()
+        user_id, result = check_permission_user()
 
         if result:
-            shuld = [
-                Q("match", weko_creator_id=user_id),
-                Q("match", weko_shared_id=user_id),
-            ]
+            user_terms = Q("terms", publish_status=[
+                PublishStatus.PUBLIC.value, PublishStatus.PRIVATE.value])
+            creator_user_match = Q("match", weko_creator_id=user_id)
+            shared_user_match = Q("match", weko_shared_id=user_id)
+            shuld = []
+            shuld.append(Q("bool", must=[user_terms, creator_user_match]))
+            shuld.append(Q("bool", must=[user_terms, shared_user_match]))
             shuld.append(Q("bool", must=mst))
             mut.append(Q("bool", should=shuld, must=[terms]))
             mut.append(Q("bool", must=version))
     else:
         mut = mst
         mut.append(terms)
-        base_mut = [match, version]
+        base_mut = [status, version]
         mut.append(Q("bool", must=base_mut))
 
     return mut, is_perm_paths
@@ -459,7 +472,6 @@ def default_search_factory(self, search, query_parser=None, search_type=None):
 
                 if isinstance(v[1], str):
                     qry = Q("range", **{v[1]: qv})
-                    print(qry)
             return qry
 
         def _get_geo_distance_query(k, v):
@@ -652,18 +664,13 @@ def default_search_factory(self, search, query_parser=None, search_type=None):
         # multi keywords search filter
         mkq = _get_detail_keywords_query()
 
-        # detail search
         if mkq:
+            # details search
             mst.extend(mkq)
-            q = _get_search_qs_query(qs)
 
-            if q:
-                mst.append(q)
-        else:
-            # Full Text Search
-            if qstr:
-                q_s = _get_file_content_query(qstr)
-                mst.append(q_s)
+        if qstr:
+            q_s = _get_file_content_query(qstr)
+            mst.append(q_s)
 
         return Q("bool", must=mst) if mst else Q()
 
@@ -684,18 +691,13 @@ def default_search_factory(self, search, query_parser=None, search_type=None):
         # multi keywords search filter
         mkq = _get_detail_keywords_query()
 
-        # detail search
         if mkq:
+            # details search
             mst.extend(mkq)
-            q = _get_search_qs_query(qs)
 
-            if q:
-                mst.append(q)
-        else:
-            # Full Text Search
-            if qstr:
-                q_s = _get_file_content_query(qstr)
-                mst.append(q_s)
+        if qstr:
+            q_s = _get_file_content_query(qstr)
+            mst.append(q_s)
 
         return Q("bool", must=mst) if mst else Q()
 
@@ -842,46 +844,62 @@ def item_path_search_factory(self, search, index_id=None):
             "query": {
                 "bool": {"must": [{"match": {"relation_version_is_last": "true"}}]}
             },
-            "aggs": {
-                "path": {
-                    "terms": {
-                        "field": "path",
-                        "include": "@idxchild",
-                        "size": "@count",
-                    },
-                    "aggs": {
-                        "date_range": {
-                            "filter": {"match": {"publish_status": "0"}},
-                            "aggs": {
-                                "available": {
-                                    "range": {
-                                        "field": "publish_date",
-                                        "ranges": [
-                                            {"from": "now+1d/d"},
-                                            {"to": "now+1d/d"},
-                                        ],
-                                    },
-                                }
-                            },
-                        },
-                        "no_available": {
-                            "filter": {
-                                "bool": {
-                                    "must_not": [{"match": {"publish_status": "0"}}]
-                                }
-                            }
-                        },
-                    },
-                }
+            "aggs": {},
+            "post_filter":{}
+        }
+
+        aggs_template = {
+            "terms": {
+                "field": "path",
+                "include": "@idxchild",
+                "size": "@count",
             },
-            "post_filter": {},
+            "aggs": {
+                "date_range": {
+                    "filter": {"match": {"publish_status": PublishStatus.PUBLIC.value}},
+                    "aggs": {
+                        "available": {
+                            "range": {
+                                "field": "publish_date",
+                                "ranges": [
+                                    {"from": "now+1d/d"},
+                                    {"to": "now+1d/d"},
+                                ],
+                            },
+                        }
+                    },
+                },
+                "no_available": {
+                    "filter": {
+                        "bool": {
+                            "must_not": [{"match": {"publish_status": PublishStatus.PUBLIC.value}}]
+                        }
+                    }
+                },
+            },
         }
 
         q = request.values.get("q") or "0" if index_id is None else index_id
+        activity_id = request.values.get("item_link")
+
+        pid_value = None
+        if activity_id:
+            from weko_workflow.api import WorkActivity
+            from invenio_pidstore.models import PersistentIdentifier
+            from weko_deposit.pidstore import get_record_without_version
+
+            activity = WorkActivity().get_activity_detail(activity_id)
+            current_pid = PersistentIdentifier.get_by_object(
+                pid_type='recid',
+                object_type='rec',
+                object_uuid=activity.item_id)
+            pid_without_ver = get_record_without_version(current_pid)
+            pid_value = pid_without_ver.pid_value
+            query_q["query"]["bool"]["must_not"] = [{"match": {"control_number": pid_value}}]
 
         if q != "0":
             # add item type aggs
-            query_q["aggs"]["path"]["aggs"].update(get_item_type_aggs(search._index[0]))
+            aggs_template["aggs"].update(get_item_type_aggs(search._index[0]))
 
             if q:
                 mut, is_perm_paths = get_permission_filter(q)
@@ -893,7 +911,9 @@ def item_path_search_factory(self, search, index_id=None):
                 post_filter = query_q["post_filter"]
 
                 if mut[0].get("bool"):
-                    post_filter["bool"] = mut[0]["bool"]
+                    mst = mut[0]["bool"]["must"]
+                    mst.append({"bool": {"should":  mut[0]["bool"]["should"]}})
+                    post_filter["bool"] = {"must": mst}
                 else:
                     post_filter["bool"] = {"must": mut}
 
@@ -901,7 +921,6 @@ def item_path_search_factory(self, search, index_id=None):
             if q:
                 try:
                     child_idx = Indexes.get_child_list_recursive(q)
-                    child_idx_str = "|".join(child_idx)
                     max_clause_count = current_app.config.get(
                         "OAISERVER_ES_MAX_CLAUSE_COUNT", 1024
                     )
@@ -920,21 +939,39 @@ def item_path_search_factory(self, search, index_id=None):
                             )
 
                         query_q["query"]["bool"]["must"].append(
-                            {"bool": {"should": div_indexes}}
+                            {"bool": {"should": div_indexes},
+                                "bool": {"must": [{"terms": {"publish_status": [
+                                    PublishStatus.PUBLIC.value, PublishStatus.PRIVATE.value]}}]}}
                         )
                     else:
-                        query_q["query"]["bool"]["must"].append(
-                            {"terms": {"path": child_idx}}
-                        )
-
-                    query_q = json.dumps(query_q).replace("@idxchild", child_idx_str)
-                    query_q = json.loads(query_q)
+                        query_q["query"]["bool"]["must"].append({
+                            "bool": {
+                                "must": [
+                                    {"terms": {"publish_status": [
+                                        PublishStatus.PUBLIC.value, PublishStatus.PRIVATE.value]}},
+                                    {"terms": {"path": child_idx}}
+                                ]
+                            }
+                        })
+                    delta = 1000
+                    if len(child_idx)<=delta:
+                        aggs = json.dumps(aggs_template).replace("@idxchild","|".join(child_idx))
+                        query_q["aggs"]["path"] = json.loads(aggs)
+                    else:
+                        for i in range(len(child_idx)//delta+1):
+                            to = i*delta+delta
+                            if len(child_idx) < to:
+                                to = len(child_idx)
+                            child_list = child_idx[i*delta:to]
+                            aggs = json.dumps(aggs_template).replace("@idxchild","|".join(child_list))
+                            query_q["aggs"]["path_{}".format(i)] = json.loads(aggs)
                 except BaseException as ex:
                     current_app.logger.error(ex)
                     import traceback
 
                     traceback.print_exc(file=sys.stdout)
-
+            else:
+                query_q["aggs"]["path"] = aggs_template
             count = str(Indexes.get_index_count())
             query_q = json.dumps(query_q).replace("@count", count)
             query_q = json.loads(query_q)
@@ -952,7 +989,7 @@ def item_path_search_factory(self, search, index_id=None):
                         "terms": {"field": "path", "size": "@count"},
                         "aggs": {
                             "date_range": {
-                                "filter": {"match": {"publish_status": "0"}},
+                                "filter": {"match": {"publish_status": PublishStatus.PUBLIC.value}},
                                 "aggs": {
                                     "available": {
                                         "range": {
@@ -968,7 +1005,7 @@ def item_path_search_factory(self, search, index_id=None):
                             "no_available": {
                                 "filter": {
                                     "bool": {
-                                        "must_not": [{"match": {"publish_status": "0"}}]
+                                        "must_not": [{"match": {"publish_status": PublishStatus.PUBLIC.value}}]
                                     }
                                 }
                             },
@@ -1001,12 +1038,20 @@ def item_path_search_factory(self, search, index_id=None):
                     )
                     div_indexes.append({"terms": {"path": child_idx[_right:_left]}})
                 query_not_q["query"]["bool"]["must"].append(
-                    {"bool": {"should": div_indexes}}
+                    {"bool": {"should": div_indexes},
+                     "bool": {"must": [{"terms": {"publish_status": [
+                         PublishStatus.PUBLIC.value, PublishStatus.PRIVATE.value]}}]}}
                 )
             else:
-                query_not_q["query"]["bool"]["must"].append(
-                    {"terms": {"path": child_idx}}
-                )
+                query_not_q["query"]["bool"]["must"].append({
+                    "bool": {
+                        "must": [
+                            {"terms": {"publish_status": [
+                                PublishStatus.PUBLIC.value, PublishStatus.PRIVATE.value]}},
+                            {"terms": {"path": child_idx}}
+                        ]
+                    }
+                })
 
             query_not_q["aggs"]["path"]["aggs"].update(
                 get_item_type_aggs(search._index[0])
@@ -1017,7 +1062,9 @@ def item_path_search_factory(self, search, index_id=None):
                 post_filter = query_not_q["post_filter"]
 
                 if mut[0].get("bool"):
-                    post_filter["bool"] = mut[0]["bool"]
+                    mst = mut[0]["bool"]["must"]
+                    mst.append({"bool": {"should":  mut[0]["bool"]["should"]}})
+                    post_filter["bool"] = {"must": mst}
                 else:
                     post_filter["bool"] = {"must": mut}
 
@@ -1102,9 +1149,9 @@ def item_path_search_factory(self, search, index_id=None):
     return search, urlkwargs
 
 
-def check_admin_user():
+def check_permission_user():
     """
-    Check administrator role user.
+    Check role user.
 
     :return: result
     """
@@ -1120,7 +1167,6 @@ def check_admin_user():
 
         for lst in list(current_user.roles or []):
 
-            # if is administrator
             if lst.name == users[2]:
                 result = True
 
@@ -1177,7 +1223,7 @@ def item_search_factory(
             current_app.config["INDEXER_DEFAULT_DOC_TYPE"]
         )
         if not query_with_publish_status:
-            query_string += " AND publish_status:0 "
+            query_string += " AND publish_status:{} ".format(PublishStatus.PUBLIC.value)
         query_string += " AND publish_date:[{} TO {}]".format(start_term, end_term)
 
         query_q = {
@@ -1204,6 +1250,7 @@ def item_search_factory(
             query_must_param.append({"exists": {"field": "path"}})
         if query_must_param:
             query_q["query"]["bool"]["must"] += query_must_param
+        query_q["query"]["bool"]["must_not"] = [{"match": {"publish_status": PublishStatus.DELETE.value}}]
         return query_q
 
     query_q = _get_query(start_date, end_date, list_index_id)

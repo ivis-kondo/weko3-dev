@@ -1008,11 +1008,15 @@ class QueryItemRegReportHelper(object):
                         for i in range(total_results):
                             if page_index * \
                                     reports_per_page <= i < (page_index + 1) * reports_per_page:
-                                start_date_string = d.strftime('%Y-%m-%d')
+                                d_start = d.replace(hour=0, minute=0, second=0,
+                                                    microsecond=0)
+                                start_date_string = d_start.strftime('%Y-%m-%d %H:%M:%S')
                                 d1 = d + delta - delta1
                                 if d1 > end_date:
                                     d1 = end_date
-                                end_date_string = d1.strftime('%Y-%m-%d')
+                                d_end = d1.replace(hour=23, minute=59, second=59,
+                                                  microsecond=9999)
+                                end_date_string = d_end.strftime('%Y-%m-%d %H:%M:%S')
                                 temp = {
                                     'start_date': start_date_string,
                                     'end_date': end_date_string,
@@ -1068,9 +1072,9 @@ class QueryItemRegReportHelper(object):
                         for i in range(total_results):
                             if page_index * \
                                     reports_per_page <= i < (page_index + 1) * reports_per_page:
-                                start_date_string = '{}-01-01'.format(
+                                start_date_string = '{}-01-01 00:00:00'.format(
                                     start_year + i)
-                                end_date_string = '{}-12-31'.format(
+                                end_date_string = '{}-12-31 23:59:59'.format(
                                     start_year + i)
                                 params = {'interval': 'year',
                                           'start_date': start_date_string,
@@ -1090,10 +1094,10 @@ class QueryItemRegReportHelper(object):
                     end_date_string = ''
                     params = {'is_restricted': False}
                     if start_date is not None:
-                        start_date_string = start_date.strftime('%Y-%m-%d')
+                        start_date_string = start_date.strftime('%Y-%m-%d 00:00:00')
                         params.update({'start_date': start_date_string})
                     if end_date is not None:
-                        end_date_string = end_date.strftime('%Y-%m-%d')
+                        end_date_string = end_date.strftime('%Y-%m-%d 23:59:59')
                         params.update({'end_date': end_date_string})
                     if not kwargs.get('ranking', False):
                         # Limit size
@@ -1134,10 +1138,10 @@ class QueryItemRegReportHelper(object):
                     end_date_string = ''
                     params = {'is_restricted': False}
                     if start_date is not None:
-                        start_date_string = start_date.strftime('%Y-%m-%d')
+                        start_date_string = start_date.strftime('%Y-%m-%d 00:00:00')
                         params.update({'start_date': start_date_string})
                     if end_date is not None:
-                        end_date_string = end_date.strftime('%Y-%m-%d')
+                        end_date_string = end_date.strftime('%Y-%m-%d 23:59:59')
                         params.update({'end_date': end_date_string})
                     res_total = query_total.run(**params)
                     i = 0
@@ -1216,6 +1220,82 @@ class QueryItemRegReportHelper(object):
             else:
                 new_result.append(i)
         return new_result if new_result else []
+
+
+class QueryRankingHelper(object):
+    """QueryRankingHelper helper class."""
+
+    @classmethod
+    def Calculation(cls, res, data_list):
+        """Create response object."""
+        for item in res['aggregations']['my_buckets']['buckets']: 
+            data = { 
+                'key': item['key'],
+                'count': int(item['my_sum']['value'])
+            }
+            data_list.append(data)
+
+    @classmethod
+    def get(cls, **kwargs):
+        """Get ranking data."""
+        result = []
+
+        try:
+            start_date = kwargs.get('start_date')
+            end_date = kwargs.get('end_date')
+            params = {
+                'start_date': start_date,
+                'end_date': end_date + 'T23:59:59',
+                'agg_size': str(kwargs.get('agg_size', 10)),
+                'event_type': kwargs.get('event_type', ''),
+                'group_field': kwargs.get('group_field', ''),
+                'count_field': kwargs.get('count_field', ''),
+                'must_not': kwargs.get('must_not', ''),
+                'new_items': False
+            }
+            all_query_cfg = current_stats.queries['get-ranking-data']
+            all_query = all_query_cfg.query_class(**all_query_cfg.query_config)
+
+            all_res = all_query.run(**params)
+
+            cls.Calculation(all_res, result)
+
+        except es_exceptions.NotFoundError as e:
+            current_app.logger.debug(e)
+        except Exception as e:
+            current_app.logger.debug(e)
+
+        return result
+
+    @classmethod
+    def get_new_items(cls, **kwargs):
+        """Get new items."""
+        result = []
+
+        try:
+            start_date = kwargs.get('start_date')
+            end_date = kwargs.get('end_date')
+            params = {
+                'start_date': start_date,
+                'end_date': end_date + 'T23:59:59',
+                'agg_size': str(kwargs.get('agg_size', 10)),
+                'must_not': kwargs.get('must_not', ''),
+                'new_items': True
+            }
+            all_query_cfg = current_stats.queries['get-new-items-data']
+            all_query = all_query_cfg.query_class(**all_query_cfg.query_config)
+
+            all_res = all_query.run(**params)
+            for r in all_res['hits']['hits']:
+                if r.get('_source', {}).get('path'):
+                    result.append(r['_source'])
+
+        except es_exceptions.NotFoundError as e:
+            current_app.logger.debug(e)
+        except Exception as e:
+            current_app.logger.debug(e)
+
+        return result
 
 
 class StatsCliUtil:

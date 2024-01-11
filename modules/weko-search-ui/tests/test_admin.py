@@ -43,23 +43,29 @@ def test_ItemManagementBulkDelete_index(i18n_app, es, users, indices):
 #     def check(self):
 # .tox/c1/bin/pytest --cov=weko_search_ui tests/test_admin.py::test_ItemManagementBulkDelete_check -vv -s --cov-branch --cov-report=term --basetemp=/code/modules/weko-search-ui/.tox/c1/tmp
 def test_ItemManagementBulkDelete_check(i18n_app, users,db_records2):
+    import secrets
     i18n_app.config['WEKO_SEARCH_TYPE_INDEX'] = 'index'
+    currect_token = secrets.token_hex()
     with i18n_app.test_client() as client:
         with patch("flask_login.utils._get_user", return_value=users[3]['obj']):
             res = client.get("/admin/items/bulk/delete/check",
-                             content_type="application/json")
+                             content_type="application/json",
+                             headers={"X-CSRFToken":currect_token})
             assert res.status_code==200
             res = client.get("/admin/items/bulk/delete/check?q=33",
-                            content_type="application/json")
+                            content_type="application/json",
+                             headers={"X-CSRFToken":currect_token})
             assert res.status_code==200
             with patch('weko_search_ui.admin.is_index_locked', return_value=False):
                 with patch('weko_search_ui.admin.get_doi_items_in_index', return_value=[1]):
                     res = client.get("/admin/items/bulk/delete/check?q=33",
-                                    content_type="application/json")
+                                    content_type="application/json",
+                                    headers={"X-CSRFToken":currect_token})
                     assert res.status_code==200
                 with patch('weko_search_ui.admin.get_doi_items_in_index', return_value=[]):
                     res = client.get("/admin/items/bulk/delete/check?q=33",
-                                    content_type="application/json")
+                                    content_type="application/json",
+                                    headers={"X-CSRFToken":currect_token})
                     assert res.status_code==200
 
 
@@ -191,6 +197,7 @@ def test_ItemImportView_download_check(i18n_app, users, client_request_args, db_
         assert test.download_check()
 
 #     def import_items(self) -> jsonify: ~ GOOD
+# .tox/c1/bin/pytest --cov=weko_search_ui tests/test_admin.py::test_ItemImportView_import_items -vv -s --cov-branch --cov-report=term --basetemp=/code/modules/weko-search-ui/.tox/c1/tmp
 def test_ItemImportView_import_items(i18n_app, users, client_request_args, db_records2):
     with patch("flask_login.utils._get_user", return_value=users[3]['obj']):
         test = ItemImportView()
@@ -236,11 +243,17 @@ def test_ItemImportView_export_template(i18n_app, users, item_type):
 
 
 # class ItemBulkExport(BaseView):
+
 #     def index(self): ~ AttributeError: 'NoneType' object has no attribute 'base_template'
-def test_ItemBulkExport_index(i18n_app, users, client_request_args, db_records2):
+# .tox/c1/bin/pytest --cov=weko_search_ui tests/test_admin.py::test_ItemBulkExport_index -vv -s --cov-branch --cov-report=term --basetemp=/code/modules/weko-search-ui/.tox/c1/tmp
+def test_ItemBulkExport_index(i18n_app, users, client_request_args, db_records2,mocker):
     with patch("flask_login.utils._get_user", return_value=users[3]['obj']):
+        mock_render = mocker.patch("weko_search_ui.admin.ItemBulkExport.render",return_value=make_response())
         test = ItemBulkExport()
-        assert test.index()
+        res = test.index()
+        assert res.status_code == 200
+        mock_render.assert_called_with("weko_search_ui/admin/export.html")
+        
 
 #     def export_all(self): ~ GETS STUCK
 # def test_ItemBulkExport_export_all(i18n_app, users, client_request_args, db_records2):
@@ -265,7 +278,48 @@ def test_ItemBulkExport_index(i18n_app, users, client_request_args, db_records2)
 #     with patch("flask_login.utils._get_user", return_value=users[3]['obj']):
 #         test = ItemBulkExport()
 #         assert test.cancel_export()
+class MockAsyncResult:
+    def __init__(self,task_id):
+        self.task_id=task_id
+    @property
+    def state(self):
+        return self.task_id.replace("_task","")
+    def successful(self):
+        return self.state == "SUCCESS"
+    def failed(self):
+        return self.state == "FAILED"
+class TestItemBulkExport:
+# .tox/c1/bin/pytest --cov=weko_search_ui tests/test_admin.py::TestItemBulkExport::test_check_export_status -vv -s --cov-branch --cov-report=term --basetemp=/code/modules/weko-search-ui/.tox/c1/tmp
+    def test_check_export_status(self,app,client,users, redis_connect,mocker):
+        
+        mocker.patch("weko_search_ui.utils.AsyncResult",side_effect=MockAsyncResult)
+        mocker.patch("weko_search_ui.admin.check_celery_is_run",return_value=True)
+        with patch("flask_login.utils._get_user", return_value=users[3]["obj"]):
+            cache_key = app.config["WEKO_ADMIN_CACHE_PREFIX"].format(
+                name="KEY_EXPORT_ALL", user_id=current_user.get_id()
+            )
+            datastore = redis_connect
+            datastore.put(cache_key, "SUCCESS_task".encode("utf-8"), ttl_secs=30)
+            
+            url = url_for("items/bulk-export.check_export_status")
 
+            res = client.get(url)
+            assert json.loads(res.data) == {'data': {
+                'celery_is_run': True, 
+                'error_message': None, 
+                'export_run_msg': None, 
+                'export_status': False, 
+                'status': 'SUCCESS', 
+                'uri_status': False}}
+
+# .tox/c1/bin/pytest --cov=weko_search_ui tests/test_admin.py::TestItemBulkExport::test_cancel_export -vv -s --cov-branch --cov-report=term --basetemp=/code/modules/weko-search-ui/.tox/c1/tmp
+    def test_cancel_export(self, app, client, users, redis_connect, mocker):
+        url = url_for("items/bulk-export.cancel_export")
+        with patch("flask_login.utils._get_user", return_value=users[3]["obj"]):
+            mocker.patch("weko_search_ui.admin.cancel_export_all",return_value=True)
+            mocker.patch("weko_search_ui.admin.get_export_status",return_value=(False,"","","","REVOKED",))
+            res = client.get(url)
+            assert json.loads(res.data) == {"data":{"cancel_status":True,"export_status":False,"status":"REVOKED"}}
 
 def compare_csv(data1, data2):
     def _str2csv(data):

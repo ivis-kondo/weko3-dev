@@ -762,7 +762,7 @@ function validateThumbnails(rootScope, scope, itemSizeCheckFlg, files) {
       $scope.getValueAuthor = function () {
         var data_author = {}
         $scope.data_author.map(function (item) {
-          data_author[item.scheme] = item.url
+          data_author[item.scheme] = {"url": item.url, "name": item.name};
         })
         $scope.authors_keys.map(function (key) {
           let list_nameIdentifiers = []
@@ -776,7 +776,7 @@ function validateThumbnails(rootScope, scope, itemSizeCheckFlg, files) {
                     if (form.hasOwnProperty(scheme)) {
                       $scope.scheme_uri_mapping.map(function (mapping) {
                         if (mapping.scheme == scheme) {
-                          form[mapping.uri] = data_author[form[scheme]]
+                          form[mapping.uri] = data_author[form[scheme]]["url"]
                         }
                       })
                     }
@@ -796,7 +796,7 @@ function validateThumbnails(rootScope, scope, itemSizeCheckFlg, files) {
                       if (form.hasOwnProperty(scheme)) {
                         $scope.scheme_uri_mapping.map(function (mapping) {
                           if (mapping.scheme == scheme) {
-                            form[mapping.uri] = data_author[form[scheme]]
+                            form[mapping.uri] = data_author[form[scheme]]["url"]
                           }
                         })
                       }
@@ -825,7 +825,7 @@ function validateThumbnails(rootScope, scope, itemSizeCheckFlg, files) {
         var data_author = {};
         let model = $rootScope.recordsVM.invenioRecordsModel;
         $scope.data_author.map(function (item) {
-          data_author[item.scheme] = item.url;
+          data_author[item.scheme] = {"url": item.url, "name": item.name};
         })
 
         let key = identifier_key.replace("[]", "");
@@ -929,11 +929,11 @@ function validateThumbnails(rootScope, scope, itemSizeCheckFlg, files) {
           let schemaMappingKey = $scope.scheme_identifier_mapping;
           let idMappingKey = $scope.identifier_mapping;
           let uriMappingKey = $scope.uri_identifier_mapping;
-          let isFillIdentifierURI = checkFillCreatorIdentifierURI(data_author[form[schemaMappingKey]], form[idMappingKey])
+          let isFillIdentifierURI = checkFillCreatorIdentifierURI(data_author[form[schemaMappingKey]]["url"], form[idMappingKey])
           if (form[schemaMappingKey] && isFillIdentifierURI) {
-            form[uriMappingKey] = data_author[form[schemaMappingKey]].replace(/#+$/, form[idMappingKey]);
+            form[uriMappingKey] = data_author[form[schemaMappingKey]]["url"].replace(/#+$/, form[idMappingKey]);
           } else {
-            form[uriMappingKey] = data_author[form[schemaMappingKey]];
+            form[uriMappingKey] = data_author[form[schemaMappingKey]]["url"];
           }
         }
         $scope.commonHandleForAuthorIdentifier(identifier_key, handleGetValueForAuthorIdentifierURI, currentForm);
@@ -1028,7 +1028,7 @@ function validateThumbnails(rootScope, scope, itemSizeCheckFlg, files) {
                                 if (author_schema.properties[key]) {
                                   author_schema.properties[key]['enum'].push(value_scheme['scheme']);
                                   author_form.items[numberTitleMap].titleMap.push({
-                                    name: value_scheme['scheme'],
+                                    name: value_scheme['name'],
                                     value: value_scheme['scheme']
                                   });
                                 }
@@ -2621,6 +2621,18 @@ function validateThumbnails(rootScope, scope, itemSizeCheckFlg, files) {
         let model = $rootScope.recordsVM.invenioRecordsModel;
         let filesUploaded = $rootScope.filesVM.files;
         $scope.searchFilemetaKey();
+        var date;
+        $.ajax({
+          url: '/api/admin/get_server_date',
+          method: 'GET',
+          async: false,
+          success: function (data, status) {
+            date = data.year+"-"+("0"+data.month).slice(-2)+"-"+("0"+data.day).slice(-2)
+          },
+          error: function (data, status) {
+            date = new Date().toJSON().slice(0,10);
+          }
+        });
         $scope.filemeta_keys.forEach(function (filemeta_key) {
           for (var i = $scope.previousNumFiles; i < filesUploaded.length; i++) {
             let fileInfo = {};
@@ -2639,7 +2651,7 @@ function validateThumbnails(rootScope, scope, itemSizeCheckFlg, files) {
             fileInfo.format = fileData.mimetype;
             // Fill Date and DateType
             fileInfo.date = [{}]; // init array
-            fileInfo.date[0].dateValue = new Date().toJSON().slice(0,10);
+            fileInfo.date[0].dateValue = date
             fileInfo.date[0].dateType = "Available";
             // Set default Access Role is Open Access
             fileInfo.accessrole = $scope.defaultFileAccessRole;
@@ -2776,6 +2788,19 @@ function validateThumbnails(rootScope, scope, itemSizeCheckFlg, files) {
         let formIndex = form.key[1];
         let beforeFileName = $scope.getFileNameToSessionStore(formIndex);
         $scope.saveFileNameToSessionStore(formIndex, modelValue);
+        var date;
+        $.ajax({
+          url: '/api/admin/get_server_date',
+          method: 'GET',
+          async: false,
+          success: function (data, status) {
+            date = data.year+"-"+("0"+data.month).slice(-2)+"-"+("0"+data.day).slice(-2)
+            
+          },
+          error: function (data, status) {
+            date = new Date().toJSON().slice(0, 10)
+          }
+        });
         $scope.filemeta_keys.forEach(function (fileMetaKey) {
           model[fileMetaKey].forEach(function (fileInfo) {
             if (fileInfo.filename === modelValue) {
@@ -2799,7 +2824,7 @@ function validateThumbnails(rootScope, scope, itemSizeCheckFlg, files) {
               }
               // Set information for「日付」.
               fileInfo.date = [{
-                dateValue: new Date().toJSON().slice(0, 10),
+                dateValue: date,
                 dateType: "Available"
               }];
 
@@ -2966,10 +2991,22 @@ function validateThumbnails(rootScope, scope, itemSizeCheckFlg, files) {
       $scope.hiddenPubdate = function () {
         let model = $rootScope["recordsVM"].invenioRecordsModel;
         if (!model["pubdate"]) {
-          let now = new Date();
-          let day = ("0" + now.getDate()).slice(-2);
-          let month = ("0" + (now.getMonth() + 1)).slice(-2);
-          model["pubdate"] = now.getFullYear() + "-" + (month) + "-" + (day);
+          $.ajax({
+            url: '/api/admin/get_server_date',
+            method: 'GET',
+            async: false,
+            success: function (data, status) {
+              let day = ("0"+data.day).slice(-2);
+              let month = ("0"+(data.month)).slice(-2);
+              model["pubdate"] = data.year+"-"+(month)+"-"+(day)
+            },
+            error: function (data, status) {
+              let now = new Date();
+              let day = ("0" + now.getDate()).slice(-2);
+              let month = ("0" + (now.getMonth() + 1)).slice(-2);
+              model["pubdate"] = now.getFullYear() + "-" + (month) + "-" + (day);
+            }
+          });
         }
         if ($("#is_hidden_pubdate").val() !== "True") {
           return;
@@ -3957,6 +3994,7 @@ function validateThumbnails(rootScope, scope, itemSizeCheckFlg, files) {
         let listItemErrors = [];
         let eitherRequired = [];
         let noEitherError = $scope.checkEitherRequired();
+        
         if (noEitherError && $scope.error_list && $scope.error_list['either']) {
           eitherRequired = [];
           $scope.error_list['either'].forEach(function (group) {
@@ -4003,7 +4041,7 @@ function validateThumbnails(rootScope, scope, itemSizeCheckFlg, files) {
             $("#react-component-version").addClass("has-error");
           }
         }
-
+        
         if (listItemErrors.length > 0) {
           let message = $("#validate_error").val() + '<br/><br/>';
           message += listItemErrors[0];
@@ -4254,6 +4292,17 @@ function validateThumbnails(rootScope, scope, itemSizeCheckFlg, files) {
           }
         }
         sessionStorage.removeItem(key);
+      }
+
+      $scope.saveActivityData = function(item_save_uri, currActivityId, enableContributor,enableFeedbackMail,startLoading,sessionValid) {
+        if (!$scope.saveDataJson(item_save_uri, currActivityId, enableContributor,enableFeedbackMail,startLoading,sessionValid)){
+          return;
+        }
+        $scope.genTitleAndPubDate();
+        if (!$scope.saveActivity()){
+          return;
+        }
+        return true
       }
 
       $scope.saveDataJson = function (item_save_uri, currentActionId, enableContributor, enableFeedbackMail, startLoading,sessionValid) {
