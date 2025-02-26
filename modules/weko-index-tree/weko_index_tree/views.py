@@ -27,7 +27,7 @@ from operator import itemgetter
 
 from flask import Blueprint, current_app, jsonify, make_response, request, \
     session
-from flask_login import current_user
+from flask_login import current_user, login_required
 from invenio_oauth2server import require_api_auth, require_oauth_scopes
 from invenio_db import db
 
@@ -36,8 +36,11 @@ from .config import WEKO_INDEX_TREE_RSS_COUNT_LIMIT, \
     WEKO_INDEX_TREE_RSS_DEFAULT_COUNT, WEKO_INDEX_TREE_RSS_DEFAULT_INDEX_ID, \
     WEKO_INDEX_TREE_RSS_DEFAULT_LANG, WEKO_INDEX_TREE_RSS_DEFAULT_PAGE, \
     WEKO_INDEX_TREE_RSS_DEFAULT_TERM, WEKO_INDEX_TREE_STATE_PREFIX
-from .scopes import create_index_scope
+from .scopes import create_index_scope, read_index_scope, update_index_scope, delete_index_scope
 from .utils import generate_path, get_elasticsearch_records_data_by_indexes
+from weko_accounts.utils import roles_required
+from weko_admin.config import WEKO_ADMIN_PERMISSION_ROLE_REPO, \
+    WEKO_ADMIN_PERMISSION_ROLE_SYSTEM
 
 blueprint = Blueprint(
     'weko_index_tree',
@@ -132,9 +135,33 @@ def set_expand():
     return jsonify(success=True)
 
 
+@blueprint_api.route('/indextree/get/<int:index_id>', methods=['GET'])
+@require_api_auth()
+@require_oauth_scopes(read_index_scope.id)
+def get_index(index_id):
+    """Get index by id."""
+    try:
+        target_index = Indexes.get_index(index_id)
+        if not target_index:
+            return make_response("Index not found.", 404)
+        else:
+            target_index_with_role = Indexes.get_index_with_role(index_id)
+            if not target_index_with_role:
+                return make_response("You are not allowed to get this index info.", 403)
+
+            return make_response(json.dumps(dict(target_index)), 200)
+
+    except Exception as e:
+        current_app.logger.error(e)
+        return make_response(str(e), 500)
+
+
 @blueprint_api.route('/indextree/create', methods=['POST'])
 @require_api_auth()
 @require_oauth_scopes(create_index_scope.id)
+@login_required
+@roles_required([WEKO_ADMIN_PERMISSION_ROLE_SYSTEM,
+                 WEKO_ADMIN_PERMISSION_ROLE_REPO])
 def create_index():
     """Create index by api."""
     try:
@@ -183,6 +210,64 @@ def create_index():
     except Exception as e:
         current_app.logger.error(e)
         return make_response(str(e), 400)
+
+
+@blueprint_api.route('/indextree/update/<int:index_id>', methods=['PUT'])
+@require_api_auth()
+@require_oauth_scopes(update_index_scope.id)
+@login_required
+@roles_required([WEKO_ADMIN_PERMISSION_ROLE_SYSTEM,
+                 WEKO_ADMIN_PERMISSION_ROLE_REPO])
+def update_index(index_id):
+    """Update index by id."""
+    try:
+        data = request.get_json(force=True)
+        if not data or not index_id:
+            return make_response("No data to update.", 400)
+
+        index_info = data.get("index_info", {})
+        index_id = int(time.time() * 1000)
+        create_data = {
+            "id": index_id,
+            "value": "New Index"
+        }
+        update_data = {**data}
+        
+        if not index_info:
+            return make_response("index_info can not be null.", 400)   
+            
+        index = Indexes.update(index_id, **update_data)
+        if not index:
+            return make_response("Index not found.", 404)
+
+        return make_response(json.dumps(dict(index)), 200)
+    
+    except Exception as e:
+        current_app.logger.error(e)
+        return make_response(str(e), 500)
+
+
+@blueprint_api.route('/indextree/delete/<int:index_id>', methods=['DELETE'])
+@require_api_auth()
+@require_oauth_scopes(delete_index_scope.id)
+@login_required
+@roles_required([WEKO_ADMIN_PERMISSION_ROLE_SYSTEM,
+                 WEKO_ADMIN_PERMISSION_ROLE_REPO])
+def delete_index(index_id):
+    """Delete index by id."""
+    try:
+        if not index_id:
+            return make_response("No index id to delete.", 400)
+            
+        index = Indexes.delete(index_id, **update_data)
+        if not index:
+            return make_response("Index not found.", 404)
+
+        return make_response(json.dumps(dict(index)), 200)
+
+    except Exception as e:
+        current_app.logger.error(e)
+        return make_response(str(e), 500)
 
 @blueprint.teardown_request
 @blueprint_api.teardown_request
