@@ -1495,6 +1495,7 @@ def copy_bucket():
         return jsonify(uri)
     except Exception as e:
         current_app.logger.error(str(e))
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 400
 
 
