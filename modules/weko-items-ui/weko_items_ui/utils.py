@@ -4519,7 +4519,25 @@ def make_stats_file_with_permission(item_type_id, recids,
     table_row_properties = item_type['table_row_map']['schema'].get(
         'properties')
 
-    class RecordsManager:
+    stack = [(table_row_properties[key], [key]) for key in item_type["table_row"]]
+    answer_list = []
+    array_properties = []
+    count = 0
+    while stack:
+        count += 1
+        property, prefix = stack.pop()
+        if not "type" in property:
+            continue
+        elif property["type"] == "object":
+            for key, sub_property in property["properties"].items():
+                stack.append((sub_property, prefix + [key]))
+        elif property["type"] == "array":
+            stack.append((property["items"], prefix + ["[]"]))
+            array_properties.append(prefix + ["[]"])
+        else:
+            answer_list.append(prefix)
+
+    class RecordsPermissionManager:
         """Management data for exporting records."""
 
         first_recid = 0
@@ -4529,9 +4547,10 @@ def make_stats_file_with_permission(item_type_id, recids,
         attr_data = {}
         attr_output = {}
 
-        def __init__(self, record_ids, records_metadata):
+        def __init__(self, record_ids, records_metadata, permissions={}):
             """Class initialization."""
             def hide_metadata_email(record):
+                from weko_records_ui.utils import check_items_settings, hide_by_email
                 """Hiding emails only.
 
                 :param name_keys:
@@ -4552,6 +4571,7 @@ def make_stats_file_with_permission(item_type_id, recids,
                 record.pop('weko_creator_id')
                 return False
 
+            self.permissions = permissions
             self.recids = record_ids
             self.first_recid = record_ids[0]
             for record_id in record_ids:
@@ -4592,7 +4612,7 @@ def make_stats_file_with_permission(item_type_id, recids,
             largest_size = 1
             self.attr_data['feedback_mail_list'] = {'max_size': 0}
             for record_id, record in self.records.items():
-                if permissions['check_created_id'](record):
+                if self.permissions['check_created_id'](record):
                     mail_list = FeedbackMailList.get_mail_list_by_item_id(
                         record.id)
                     self.attr_data['feedback_mail_list'][record_id] = [
@@ -4608,7 +4628,7 @@ def make_stats_file_with_permission(item_type_id, recids,
             largest_size = 1
             self.attr_data['request_mail_list'] = {'max_size': 0}
             for record_id, record in self.records.items():
-                if permissions['check_created_id'](record):
+                if self.permissions['check_created_id'](record):
                     mail_list = RequestMailList.get_mail_list_by_item_id(
                         record.id)
                     self.attr_data['request_mail_list'][record_id] = [
@@ -4623,12 +4643,32 @@ def make_stats_file_with_permission(item_type_id, recids,
         def get_item_application(self):
             self.attr_data['item_application']={}
             for record_id, record in self.records.items():
-                if permissions['check_created_id'](record):
+                if self.permissions['check_created_id'](record):
                     item_application = ItemApplication.get_item_application_by_item_id(record.id)
                     self.attr_data['item_application'][record_id] = {'workflow':item_application.get('workflow',""),
                                                                     'terms':item_application.get('terms',""),
                                                                     'termsDescription':item_application.get('termsDescription',"")}
             return 0
+
+        def get_max_items_from_map(self, item_fullpath_key, max_map):
+            """Get max data each sub property in all exporting records."""
+            list_attr = []
+            splitted_attrs = item_fullpath_key.split('.')
+            for idx, attr in enumerate(splitted_attrs):
+                index_left_racket = attr.find('[')
+                if index_left_racket >= 0:
+                    bracket_key = attr[index_left_racket:] if idx != len(splitted_attrs)-1 else "[]"
+                    list_attr.extend([attr[:index_left_racket], bracket_key])
+                else:
+                    list_attr.append(attr)
+
+            level = len(list_attr)
+            if level == 1:
+                canon_path = (list_attr[0], "[]")
+            else:
+                canon_path = tuple(list_attr)
+            max_length = max_map.get(canon_path, 1)
+            return max_length
 
         def get_max_items(self, item_attrs):
             """Get max data each sub property in all exporting records."""
@@ -4639,7 +4679,7 @@ def make_stats_file_with_permission(item_type_id, recids,
                 if index_left_racket >= 0:
                     list_attr.extend(
                         [attr[:index_left_racket],
-                         attr[index_left_racket:]]
+                            attr[index_left_racket:]]
                     )
                 else:
                     list_attr.append(attr)
@@ -4675,12 +4715,81 @@ def make_stats_file_with_permission(item_type_id, recids,
                             max_length = len(_data)
             return max_length
 
+
+        def iter_list_lengths_with_canon_paths(self, root, array_properties):
+            """
+            root を 1 回走査し、(正規化パス, リスト長) を逐次返す。
+            正規化パスはタプルで保持（後で文字列に変換可）。
+            規則:
+            - 辞書のキーを '.' で繋ぐパスを形成
+            - 配列内の位置は '[]' でワイルドカード化
+            - 「辞書キーが指す値が配列」のケースだけ (path, len) を yield
+            """
+            stack = [(root, [], [])]
+
+            while stack:
+                node, path, canon_path = stack.pop()
+                if isinstance(node, dict):
+                    for k, v in node.items():
+                        if k == 'attribute_value_mlt' and isinstance(v, list):
+                            # attribute_value_mlt 配列は特別扱い
+                            # 親パスに '[]' を追加した形で記録
+                            mlt_path = path + ["[]"]
+                            if canon_path + ["[]"] not in array_properties:
+                                print("Skip attribute_value_mlt path:", mlt_path)
+                                continue
+                            yield tuple(mlt_path), len(v)
+                            # attribute_value_mlt 配列はスキップして中身を探索
+                            for idx, elem in enumerate(v):
+                                stack.append((elem, path + [f"[{str(idx)}]"], path + ["[]"]))
+                            continue
+                        child_path = path + [k]
+                        child_canon_path = canon_path + [k]
+                        if isinstance(v, list):
+                            # 記録（この辞書キーが指す配列の長さ）
+                            if child_canon_path + ["[]"] not in array_properties:
+                                print("Skip array path2:", child_path)
+                                print("canon_path", child_canon_path)
+                                continue
+                            yield tuple(child_path), len(v)
+                            # 要素も探索して、下層にある「辞書キーが指す配列」を拾う
+                            for idx, elem in enumerate(v):
+                                # インデックスは正規化して '[]' にする
+                                stack.append((elem, child_path + [f"[{str(idx)}]"], child_canon_path + ["[]"]))
+                        elif isinstance(v, dict):
+                            stack.append((v, child_path, child_canon_path))
+                        # それ以外は無視
+                elif isinstance(node, list):
+                    # キー無しの配列。直接の記録対象外だが、下層の辞書キー配列を拾うため探索継続
+                    for idx, elem in enumerate(node):
+                        stack.append((elem, path + [f"[{str(idx)}]"], canon_path + ["[]"]))
+                # それ以外は無視
+
+
+        def aggregate_max_lengths(self, objs, array_properties):
+            """
+            多数のオブジェクトを線形時間で集計し、正規化フルパスごとの最大配列長を返す。
+            出力のキー形式は 'a.b[].c' のような文字列。
+            """
+            max_map = {}
+            for _, obj in objs.items():
+                for ptuple, L in self.iter_list_lengths_with_canon_paths(obj, array_properties):
+                    # ハッシュ表で最大化（定数時間）
+                    if ptuple in max_map:
+                        if L > max_map[ptuple]:
+                            max_map[ptuple] = L
+                    else:
+                        max_map[ptuple] = L
+
+            return max_map
+
         def get_subs_item(self,
-                          item_key,
-                          item_label,
-                          properties,
-                          data=None,
-                          is_object=False):
+                            item_key,
+                            item_label,
+                            properties,
+                            max_map,
+                            data=None,
+                            is_object=False):
             """Building key, label and data from key properties.
 
             Arguments:
@@ -4695,11 +4804,13 @@ def make_stats_file_with_permission(item_type_id, recids,
                 ret_data    -- Record data
 
             """
+            from weko_records_ui.views import escape_newline
             o_ret = []
             o_ret_label = []
             ret_data = []
-            max_items = self.get_max_items(item_key)
-            max_items = 1 if is_object else max_items
+            # Get max item count
+            # max_items = self.get_max_items(item_key) if not is_object else 1
+            max_items = self.get_max_items_from_map(item_key, max_map)
             for idx in range(max_items):
                 key_list = []
                 key_label = []
@@ -4719,13 +4830,16 @@ def make_stats_file_with_permission(item_type_id, recids,
                         new_key += '[{}]'
                         new_label += '[{}]'
                         if isinstance(data, dict):
+                            print("dict")
                             data = [data]
                         if data and data[idx].get(key):
+                            print("with data")
                             for idx_c in range(len(data[idx][key])):
                                 key_list.append(new_key.format(idx_c))
                                 key_label.append(new_label.format(idx_c))
                                 key_data.append(data[idx][key][idx_c])
                         else:
+                            print("without data")
                             key_list.append(new_key.format('0'))
                             key_label.append(new_label.format('0'))
                             key_data.append('')
@@ -4744,7 +4858,7 @@ def make_stats_file_with_permission(item_type_id, recids,
                             new_is_object = False
 
                         sub, sublabel, subdata = self.get_subs_item(
-                            new_key, new_label, new_properties,
+                            new_key, new_label, new_properties, max_map,
                             m_data, new_is_object)
                         key_list.extend(sub)
                         key_label.extend(sublabel)
@@ -4799,7 +4913,7 @@ def make_stats_file_with_permission(item_type_id, recids,
 
             return o_ret, o_ret_label, ret_data
 
-    records = RecordsManager(recids, records_metadata)
+    records = RecordsPermissionManager(recids, records_metadata, permissions=permissions)
 
     ret = ['#.id', '.uri']
     ret_label = ['#ID', 'URI']
@@ -4893,7 +5007,7 @@ def make_stats_file_with_permission(item_type_id, recids,
             cnri = pid_cnri.pid_value.replace(WEKO_SERVER_CNRI_HOST_LINK, '')
         records.attr_output[recid].append(cnri)
 
-        identifier = IdentifierHandle(record.pid_recid.object_uuid)
+        identifier = IdentifierHandle(record.pid_recid.object_uuid, item_type_id=item_type_id)
         doi_value, doi_type = identifier.get_idt_registration_data()
         doi_type_str = doi_type[0] if doi_type and doi_type[0] else ''
         doi_str = doi_value[0] if doi_value and doi_value[0] else ''
@@ -4924,8 +5038,11 @@ def make_stats_file_with_permission(item_type_id, recids,
         records.attr_output[recid].append(record[
             'pubdate']['attribute_value'])
 
-    for item_key in item_type.get('table_row'):
-        item = table_row_properties.get(item_key)
+    max_map = records.aggregate_max_lengths(records.records, array_properties)
+    current_app.logger.error("max_map:{}".format(max_map))
+    current_app.logger.error("max_map keys count:{}".format(len(max_map.keys())))
+
+    for item_key, item in table_row_properties.items():
         records.get_max_ins(item_key)
         keys = []
         labels = []
@@ -4934,25 +5051,18 @@ def make_stats_file_with_permission(item_type_id, recids,
             # print("item.get(type):{}".format(item.get('type')))
             # print("item_key:{}".format(item_key))
             # print("records.attr_data[item_key]: {}".format(records.attr_data[item_key]))
-            if item.get('type') == 'array':
+            if item_key not in records.attr_data:
+                continue
+            if item.get('type') in ["array", "object"]:
+                is_object = item.get('type') == "object"
+                properties = item['items']['properties'] if not is_object else item['properties']
                 key, label, data = records.get_subs_item(
                     item_key,
                     item.get('title'),
-                    item['items']['properties'],
-                    records.attr_data[item_key][recid]
-                )
-                if not keys:
-                    keys = key
-                if not labels:
-                    labels = label
-                records.attr_output[recid].extend(data)
-            elif item.get('type') == 'object':
-                key, label, data = records.get_subs_item(
-                    item_key,
-                    item.get('title'),
-                    item['properties'],
+                    properties,
+                    max_map,
                     records.attr_data[item_key][recid],
-                    True
+                    is_object
                 )
                 if not keys:
                     keys = key
@@ -5674,3 +5784,4 @@ def set_prefix_scheme_to_schema(prop_type, schema_data, prefix_list, affiliation
                 "properties" in schema_data["items"]["properties"][as_key]["items"]["properties"][aids_key]["items"] and \
                 aid_key in schema_data["items"]["properties"][as_key]["items"]["properties"][aids_key]["items"]["properties"]:
             schema_data["items"]["properties"][as_key]["items"]["properties"][aids_key]["items"]["properties"][aid_key]["enum"] = affiliation_list
+
