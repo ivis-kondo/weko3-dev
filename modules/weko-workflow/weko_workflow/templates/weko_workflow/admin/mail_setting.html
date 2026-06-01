@@ -15,6 +15,7 @@
                         <div class="form-inline">
                             <label style="font-weight: unset;">
                                 <input type="checkbox" class="pointer checkbox_change"
+                                    data-target=".notification_email_setting_group_{{action.action_id}}"
                                     id="td_action_request_approval_{{action.action_id}}" {% if
                                     (action.send_mail_setting.request_approval and
                                     action.send_mail_setting.request_approval.send) or
@@ -25,8 +26,9 @@
                         </div>
                         <div style="display: flex; justify-content: flex-end;">
                             <nobr>{{_('Login User')}}：</nobr>
-                            <select style="width: 250px" id="td_action_request_approval_mail_{{action.action_id}}" {% if
-                                not( (action.send_mail_setting.request_approval and
+                            <select style="width: 250px" id="td_action_request_approval_mail_{{action.action_id}}"
+                                class="notification_email_setting_group_{{action.action_id}}"
+                                {% if not( (action.send_mail_setting.request_approval and
                                 action.send_mail_setting.request_approval.send) or
                                 (action.send_mail_setting.request_approval_for_guest and
                                 action.send_mail_setting.request_approval_for_guest.send) )%}disabled{% endif %}>
@@ -41,7 +43,9 @@
                         <div style="display: flex; justify-content: flex-end;">
                             <nobr>{{_('Guest User')}}：</nobr>
                             <select style="width: 250px"
-                                id="td_action_request_approval_mail_for_guest_{{action.action_id}}" {% if not(
+                                id="td_action_request_approval_mail_for_guest_{{action.action_id}}"
+                                class="notification_email_setting_group_{{action.action_id}}"
+                                {% if not(
                                 (action.send_mail_setting.request_approval and
                                 action.send_mail_setting.request_approval.send) or
                                 (action.send_mail_setting.request_approval_for_guest and
@@ -59,6 +63,7 @@
                         <div class="form-inline">
                             <label style="font-weight: unset;">
                                 <input type="checkbox" class="pointer checkbox_change"
+                                    data-target=".notification_rejected_email_setting_group_{{action.action_id}}"
                                     id="td_action_approval_reject_{{action.action_id}}" {% if
                                     (action.send_mail_setting.inform_reject and
                                     action.send_mail_setting.inform_reject.send) or
@@ -68,8 +73,10 @@
                         </div>
                         <div style="display: flex; justify-content: flex-end;">
                             <nobr>{{_('Login User')}}：</nobr>
-                            <select style="width: 250px" id="td_action_approval_reject_mail_{{action.action_id}}" {% if
-                                not ( (action.send_mail_setting.inform_reject and
+                            <select style="width: 250px"
+                                id="td_action_approval_reject_mail_{{action.action_id}}"
+                                class="notification_rejected_email_setting_group_{{action.action_id}}"
+                                {% if not ((action.send_mail_setting.inform_reject and
                                 action.send_mail_setting.inform_reject.send) or
                                 (action.send_mail_setting.inform_reject_for_guest and
                                 action.send_mail_setting.inform_reject_for_guest.send) ) %}disabled{% endif %}>
@@ -85,8 +92,9 @@
                         <div style="display: flex; justify-content: flex-end;">
                             <nobr>{{_('Guest User')}}：</nobr>
                             <select style="width: 250px"
-                                id="td_action_approval_reject_mail_for_guest_{{action.action_id}}" {% if not (
-                                (action.send_mail_setting.inform_reject and action.send_mail_setting.inform_reject.send)
+                                id="td_action_approval_reject_mail_for_guest_{{action.action_id}}"
+                                class="notification_rejected_email_setting_group_{{action.action_id}}"
+                                {% if not ((action.send_mail_setting.inform_reject and action.send_mail_setting.inform_reject.send)
                                 or (action.send_mail_setting.inform_reject_for_guest and
                                 action.send_mail_setting.inform_reject_for_guest.send) )%}disabled{% endif %}>
                                 <option value="0"></option>
@@ -102,7 +110,8 @@
                         <div class="form-inline">
                             <label style="font-weight: unset;">
                                 <input type="checkbox" class="pointer checkbox_change"
-                                    id="td_action_approval_done_{{action.action_id}}" {% if
+                                    id="td_action_approval_done_{{action.action_id}}"
+                                    data-target=".notification_approved_email_setting_group_{{action.action_id}}" {% if
                                     (action.send_mail_setting.inform_approval and
                                     action.send_mail_setting.inform_approval.send) or
                                     (action.send_mail_setting.inform_approval_for_guest and
@@ -111,8 +120,10 @@
                         </div>
                         <div style="display: flex; justify-content: flex-end;">
                             <nobr>{{_('Login User')}}：</nobr>
-                            <select style="width: 250px" id="td_action_approval_done_mail_{{action.action_id}}" {% if
-                                not( (action.send_mail_setting.inform_approval and
+                            <select style="width: 250px"
+                                id="td_action_approval_done_mail_{{action.action_id}}"
+                                class="notification_approved_email_setting_group_{{action.action_id}}"
+                                {% if not ((action.send_mail_setting.inform_approval and
                                 action.send_mail_setting.inform_approval.send) or
                                 (action.send_mail_setting.inform_approval_for_guest and
                                 action.send_mail_setting.inform_approval_for_guest.send) ) %}disabled{% endif %}>
@@ -127,6 +138,7 @@
                         <div style="display: flex; justify-content: flex-end;">
                             <nobr>{{_('Guest User')}}：</nobr>
                             <select style="width: 250px"
+                                class="notification_approved_email_setting_group_{{action.action_id}}"
                                 id="td_action_approval_done_mail_for_guest_{{action.action_id}}" {% if not(
                                 (action.send_mail_setting.inform_approval and
                                 action.send_mail_setting.inform_approval.send) or
