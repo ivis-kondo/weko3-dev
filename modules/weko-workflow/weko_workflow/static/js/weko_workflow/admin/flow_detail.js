@@ -93,6 +93,10 @@ $(document).ready(function () {
 
   function updateSelectboxEnabled($checkbox) {
     const targetSelector = $checkbox.data('target');
+    if (!targetSelector) {
+      // console.debug('No target selector specified for checkbox:', $checkbox);
+      return;
+    }
     let $targets = $(targetSelector);
 
     // Search for the closest parent class modal
@@ -100,6 +104,10 @@ $(document).ready(function () {
     if ($modal.length > 0) {
       // If found, limit the search for the select box within this modal
       $targets = $modal.find(targetSelector);
+    }
+    if ($targets.length === 0) {
+      // console.debug('No target elements found for selector:', targetSelector);
+      return;
     }
 
     const isChecked = $checkbox.prop('checked');
