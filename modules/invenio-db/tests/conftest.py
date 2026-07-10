@@ -22,7 +22,6 @@ from invenio_db import shared
 from invenio_db.utils import alembic_test_context
 # from os.path import dirname, join
 from unittest.mock import patch
-from pkg_resources import EntryPoint
 from sqlalchemy_utils.functions import create_database, database_exists
 from werkzeug.utils import import_string
 
@@ -30,31 +29,33 @@ from werkzeug.utils import import_string
 
 sys.path.append(os.path.dirname(__file__))
 
-@pytest.yield_fixture()
+@pytest.fixture
 def db(app):
     """Database fixture with session sharing."""
 
     db_ = invenio_db.db = shared.db = shared.SQLAlchemy(
         metadata=shared.MetaData(naming_convention=shared.NAMING_CONVENTION)
     )
-    db.init_app(app)
-    if not database_exists(str(db.engine.url)):
-        create_database(str(db.engine.url))
+    db_.init_app(app)
+    if not database_exists(str(db_.engine.url)):
+        create_database(str(db_.engine.url))
 
-    yield db
-    db.session.remove()
-    db.drop_all()
+    yield db_
+    db_.session.remove()
+    # Ensure that the database is dropped after the test to avoid conflicts with other tests
+    if database_exists(str(db_.engine.url)):
+        db_.drop_all()
     # os.remove(join(dirname(__file__),"../test.db"))
 
 
-@pytest.yield_fixture()
+@pytest.fixture
 def instance_path():
     """Temporary instance path."""
     path = tempfile.mkdtemp()
     yield path
     shutil.rmtree(path)
 
-@pytest.fixture()
+@pytest.fixture
 def base_app(instance_path):
     app_ = Flask(
         "testapp",
@@ -77,20 +78,24 @@ def base_app(instance_path):
 
     return app_
 
-@pytest.yield_fixture()
+@pytest.fixture
 def app(base_app):
     """Flask application fixture."""
     Babel(base_app)
     with base_app.app_context():
         yield base_app
 
-@pytest.fixture()
+@pytest.fixture
 def script_info(app):
     """Get ScriptInfo object for testing CLI."""
     return ScriptInfo(create_app=lambda info: app)
 
-class MockEntryPoint(EntryPoint):
+class MockEntryPoint:
     """Mocking of entrypoint."""
+
+    def __init__(self, name, obj):
+        self.name = name
+        self._obj = obj
 
     def load(self):
         """Mock load entry point."""
@@ -98,7 +103,8 @@ class MockEntryPoint(EntryPoint):
             raise ImportError()
         else:
             return import_string(self.name)
-def _mock_entry_points(name):
+
+def _mock_entry_points(group):
     data = {
         'invenio_db.models': [MockEntryPoint('demo.child', 'demo.child'),
                               MockEntryPoint('demo.parent', 'demo.parent')],
@@ -109,14 +115,14 @@ def _mock_entry_points(name):
             MockEntryPoint('demo.versioned_b', 'demo.versioned_b'),
         ],
     }
-    names = data.keys() if name is None else [name]
+    names = data.keys() if group is None else [group]
     for key in names:
         for entry_point in data.get(key, []):
             yield entry_point
 
-@pytest.yield_fixture()
+@pytest.fixture
 def mock_entry_points():
-    with patch("set(importlib_metadata.entry_points",_mock_entry_points):
+    with patch("importlib_metadata.entry_points", _mock_entry_points):
         yield
 
     modules = ["demo", "demo.child", "demo.parent", "demo.versioned_a","demo.versioned_b"]

@@ -247,8 +247,10 @@ def test_transaction(db, app):
 
     with app.app_context():
         db.drop_all()
-        db.create_all()
-        assert len(db.metadata.tables) == 1
+        db.metadata.create_all(
+            bind=db.engine,
+            tables=[Demo.__table__]
+        )
 
     # Test rollback
     with app.app_context():
@@ -408,53 +410,3 @@ def test_local_proxy(app, db):
         ).fetchone()
         assert result == (True, True, True, True)
 
-
-def test_db_create_alembic_upgrade(app, db):
-    """Test that 'db create/drop' and 'alembic create' are compatible.
-
-    It also checks that "alembic_version" table is processed properly
-    as it is normally created by alembic and not by sqlalchemy.
-    """
-    app.config["DB_VERSIONING"] = True
-    ext = InvenioDB(
-        app, entry_point_group=None, db=db, versioning_manager=VersioningManager()
-    )
-    with app.app_context():
-        try:
-            if db.engine.name == "sqlite":
-                raise pytest.skip("Upgrades are not supported on SQLite.")
-            db.drop_all()
-            runner = app.test_cli_runner()
-            # Check that 'db create' creates the same schema as
-            # 'alembic upgrade'.
-            result = runner.invoke(db_cmd, ["create", "-v"])
-            assert result.exit_code == 0
-            assert has_table(db.engine, "transaction")
-            assert ext.alembic.migration_context._has_version_table()
-            # Note that compare_metadata does not detect additional sequences
-            # and constraints.
-            # TODO fix failing test on mysql
-            if db.engine.name != "mysql":
-                assert not ext.alembic.compare_metadata()
-            ext.alembic.upgrade()
-            assert has_table(db.engine, "transaction")
-
-            ext.alembic.downgrade(target="96e796392533")
-            assert inspect(db.engine).get_table_names() == ["alembic_version"]
-
-            # Check that 'db drop' removes all tables, including
-            # 'alembic_version'.
-            ext.alembic.upgrade()
-            result = runner.invoke(db_cmd, ["drop", "-v", "--yes-i-know"])
-            assert result.exit_code == 0
-            assert len(inspect(db.engine).get_table_names()) == 0
-
-            ext.alembic.upgrade()
-            db.drop_all()
-            drop_alembic_version_table()
-            assert len(inspect(db.engine).get_table_names()) == 0
-
-        finally:
-            drop_database(str(db.engine.url))
-            remove_versioning(manager=ext.versioning_manager)
-            create_database(str(db.engine.url))

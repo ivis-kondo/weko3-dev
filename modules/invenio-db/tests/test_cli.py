@@ -6,6 +6,7 @@ from flask import current_app
 from werkzeug.local import LocalProxy
 from click.testing import CliRunner
 from sqlalchemy_utils.functions import create_database
+from sqlalchemy_utils import database_exists
 
 from invenio_db import InvenioDB
 
@@ -99,6 +100,7 @@ def test_destroy(app,db,script_info,mock_entry_points,mocker):
     assert "Destroying database" in result.output
     # assert "Sqlite database has not been initialised" in result.output
     assert mock_spy.call_count == 1
+    assert not database_exists(str(db.engine.url))
     
     _db = LocalProxy(lambda: current_app.extensions['sqlalchemy'].db)
     create_database(str(_db.engine.url))
@@ -110,7 +112,8 @@ def test_destroy(app,db,script_info,mock_entry_points,mocker):
         obj=script_info
     )
     assert "Destroying database" in result.output
-    mock_spy.call_count == 2
+    assert mock_spy.call_count == 2
+    assert not database_exists(str(db.engine.url))
     
     # _db.engine.name != sqlite
     with patch("sqlalchemy.engine.base.Engine.name",return_value="postgres"):
@@ -121,5 +124,6 @@ def test_destroy(app,db,script_info,mock_entry_points,mocker):
             obj=script_info
         )
         assert "Destroying database" in result.output
-        mock_spy.call_count == 3
+        assert mock_spy.call_count == 3
+        assert not database_exists(str(db.engine.url))
     

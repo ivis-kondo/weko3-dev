@@ -34,11 +34,15 @@ def test_rebuild_encrypted_properties(db, app):
     def _secret_key():
         return app.config.get("SECRET_KEY").encode("utf-8")
 
+    class CashableEncryptedType(EncryptedType):
+        """A subclass of EncryptedType that allows caching."""
+        cache_ok = True
+
     class Demo(db.Model):
         __tablename__ = "demo"
         pk = db.Column(sa.Integer, primary_key=True)
         et = db.Column(
-            EncryptedType(type_in=db.Unicode, key=_secret_key), nullable=False
+            CashableEncryptedType(type_in=db.Unicode, key=_secret_key), nullable=False
         )
 
     InvenioDB(app, entry_point_group=False, db=db)
