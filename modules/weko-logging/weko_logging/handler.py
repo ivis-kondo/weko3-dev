@@ -15,7 +15,6 @@ from flask_security import current_user
 
 from invenio_accounts.models import User
 from invenio_db import db
-from weko_logging.models import UserActivityLog
 
 class UserActivityLogHandler(logging.Handler):
     """Logging handler for audit logs."""
@@ -107,6 +106,7 @@ class UserActivityLogHandler(logging.Handler):
         timestamp_seconds = record.created
         created_dt = datetime.fromtimestamp(timestamp_seconds)
 
+        from weko_logging.models import UserActivityLog
         user_activity_log = UserActivityLog(
             user_id=user_id,
             log={},

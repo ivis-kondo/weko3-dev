@@ -10,7 +10,6 @@
 from flask import current_app, g, has_request_context
 from werkzeug.local import LocalProxy
 
-from weko_logging.models import UserActivityLog
 from weko_logging.handler import UserActivityLogHandler
 
 _logger = LocalProxy(lambda: current_app.extensions["weko-logging-activity"])
@@ -120,6 +119,7 @@ class UserActivityLogger:
         Returns:
             bool: True if the log group ID was successfully issued, False otherwise.
         """
+        from weko_logging.models import UserActivityLog
         if not has_request_context():
             return False
 
