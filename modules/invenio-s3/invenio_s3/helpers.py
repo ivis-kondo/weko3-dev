@@ -15,7 +15,7 @@ from werkzeug.datastructures import Headers
 from werkzeug.urls import url_quote
 
 
-def redirect_stream(url,
+def redirect_stream(s3_url_builder,
                     filename,
                     size,
                     mtime,
@@ -29,7 +29,7 @@ def redirect_stream(url,
                     trusted=False):
     """Redirect to URL to serve the file directly from there.
 
-    :param url: redirection URL
+    :param s3_url_builder: function to build the redirection URL
 
     :return: Flaks response.
     """
@@ -81,6 +81,12 @@ def redirect_stream(url,
         headers.add('Content-Disposition', 'attachment', **filenames)
     else:
         headers.add('Content-Disposition', 'inline')
+
+    # Build the redirect URL using the provided s3_url_builder function
+    url = s3_url_builder(
+        ResponseContentType=mimetype,
+        ResponseContentDisposition=headers.get('Content-Disposition'))
+    headers['Location'] = url
 
     # Construct response object.
     rv = current_app.response_class(

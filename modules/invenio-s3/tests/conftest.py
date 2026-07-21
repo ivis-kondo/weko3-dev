@@ -74,8 +74,13 @@ def location(location_path, database):
         type='s3',
         access_key='',
         secret_key='',
-        s3_endpoint_url="",
-        s3_send_file_directly=True
+        readonly_access_key='',
+        readonly_secret_key='',
+        s3_endpoint_url="https://s3.amazonaws.com",
+        s3_send_file_directly=True,
+        s3_maximum_number_of_parts=1000,
+        s3_default_block_size=10*1024*1024,
+        s3_url_expiration=3600
     )
     database.session.add(loc)
     database.session.commit()

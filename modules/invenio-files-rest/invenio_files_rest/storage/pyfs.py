@@ -44,7 +44,7 @@ class PyFSFileStorage(FileStorage):
         self.clean_dir = clean_dir
         super(PyFSFileStorage, self).__init__(size=size, modified=modified)
 
-    def _get_fs(self, create_dir=True):
+    def _get_fs(self, create_dir=True, mode='rb'):
         """Return tuple with filesystem and filename."""
         filedir = dirname(self.fileurl)
         filename = basename(self.fileurl)
@@ -59,7 +59,7 @@ class PyFSFileStorage(FileStorage):
 
         The caller is responsible for closing the file.
         """
-        fs, path = self._get_fs()
+        fs, path = self._get_fs(mode=mode)
         return fs.open(path, mode=mode)
 
     def delete(self):
@@ -68,7 +68,7 @@ class PyFSFileStorage(FileStorage):
         The base directory is also removed, as it is assumed that only one file
         exists in the directory.
         """
-        fs, path = self._get_fs(create_dir=False)
+        fs, path = self._get_fs(create_dir=False, mode='wb')
         if fs.exists(path):
             fs.remove(path)
         if self.clean_dir and fs.exists('.'):
@@ -77,7 +77,7 @@ class PyFSFileStorage(FileStorage):
 
     def initialize(self, size=0):
         """Initialize file on storage and truncate to given size."""
-        fs, path = self._get_fs()
+        fs, path = self._get_fs(mode='wb')
 
         # Required for reliably opening the file on certain file systems:
         if fs.exists(path):

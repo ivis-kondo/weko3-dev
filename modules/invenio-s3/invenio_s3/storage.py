@@ -7,7 +7,7 @@
 """S3 file storage interface."""
 from __future__ import absolute_import, print_function
 
-from io import BytesIO
+from functools import partial
 
 import s3fs
 from flask import current_app
@@ -26,19 +26,19 @@ class S3FSFileStorage(PyFSFileStorage):
         """Storage initialization."""
         super(S3FSFileStorage, self).__init__(fileurl, **kwargs)
 
-    def _get_fs(self, *args, **kwargs):
-        """Ge PyFilesystem instance and S3 real path."""
-        if not self.fileurl.startswith('s3://'):
-            return super(S3FSFileStorage, self)._get_fs(*args, **kwargs)
+    def _get_fs(self, mode='rb', *args, **kwargs):
+        """Get PyFilesystem instance and S3 real path."""
+        if self.location is None or self.location.type == None:
+            return super(S3FSFileStorage, self)._get_fs(mode=mode, *args, **kwargs)
 
-        info = current_app.extensions['invenio-s3'].init_s3f3_info
-        fs = s3fs.S3FileSystem(**info)
+        info = current_app.extensions['invenio-s3'].init_s3fs_info(location=self.location, mode=mode)
+        fs = s3fs.S3FileSystem(default_block_size=self.block_size, **info)
 
         return (fs, self.fileurl)
 
     def initialize(self, size=0):
         """Initialize file on storage and truncate to given size."""
-        fs, path = self._get_fs()
+        fs, path = self._get_fs(mode='wb')
 
         self.remove(fs, path)
         fp = fs.open(path, mode='wb')
@@ -72,7 +72,7 @@ class S3FSFileStorage(PyFSFileStorage):
 
     def delete(self):
         """Delete a file."""
-        fs, path = self._get_fs()
+        fs, path = self._get_fs(mode='wb')
         self.remove(fs, path)
         return True
 
@@ -136,8 +136,15 @@ class S3FSFileStorage(PyFSFileStorage):
                                                           chunk_size=chunk_size,
                                                           as_attachment=as_attachment)
         try:
-            fs, path = self._get_fs()
-            url = fs.url(path, expires=60)
+            fs, path = self._get_fs(mode='rb')
+            s3_url_builder = partial(
+                fs.url, path, expires=current_app.config['S3_URL_EXPIRATION']
+            )
+            if self.location:
+                if self.location.type != None:
+                    s3_url_builder = partial(
+                        fs.url, path, expires=self.location.s3_url_expiration
+                    )
 
             md5_checksum = None
             if checksum:
@@ -146,7 +153,7 @@ class S3FSFileStorage(PyFSFileStorage):
                     md5_checksum = value
 
             return redirect_stream(
-                url,
+                s3_url_builder,
                 filename,
                 self._size,
                 self._modified,
@@ -167,9 +174,13 @@ class S3FSFileStorage(PyFSFileStorage):
         If the source is an S3 stored object the copy process happens on the S3
         server side, otherwise we use the normal ``FileStorage`` copy method.
         """
-        if src.fileurl.startswith('s3://'):
-            fs, path = self._get_fs()
-            fs.copy(src.fileurl, path)
+        if self.location:
+            if self.location.type != None:
+                fs, path = self._get_fs(mode='wb')
+                fs.copy(src.fileurl, path)
+            else:
+            # local repository
+                super(S3FSFileStorage, self).copy(src, *args, **kwargs)
         else:
             super(S3FSFileStorage, self).copy(src, *args, **kwargs)
 

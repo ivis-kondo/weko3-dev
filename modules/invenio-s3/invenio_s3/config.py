@@ -39,6 +39,25 @@ See `Configuring Credentials
 for more information.
 """
 
+S3_READONLY_ACCESS_KEY_ID = None
+S3_READONLY_SECRET_ACCESS_KEY = None
+"""The access key, secret key to use when downloading files from the client."""
+
+S3_URL_EXPIRATION = 60
+"""Number of seconds the file serving URL will be valid.
+
+See `Amazon Boto3 documentation on presigned URLs
+<https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3.html#S3.Client.generate_presigned_url>`_
+for more information.
+"""
+
+S3_SIGNATURE_VERSION = 's3v4'
+"""Version of the S3 signature algorithm. Can be 's3' (v2) or 's3v4' (v4).
+See `Amazon Boto3 documentation on configuration variables
+<https://boto3.amazonaws.com/v1/documentation/api/latest/guide/configuration.html#configuration-file>`_
+for more information.
+"""
+
 S3_SEND_FILE_DIRECTLY = True
 """The flag to use when send file to the client.
 
