@@ -20,7 +20,7 @@ def test_bulk_post_item_to_researchmap(app):
                         bulk_post_item_to_researchmap()
 
 # .tox/c1/bin/pytest --cov=weko_items_ui tests/test_tasks.py::test_process_researchmap_queue -vv -s --cov-branch --cov-report=html --basetemp=/code/modules/weko_items_ui/.tox/c1/tmp --full-trace
-def test_process_researchmap_queue(app ,db, db_records_researchmap):
+def test_process_researchmap_queue(app, db, db_records_researchmap, user_activity_log_partition_table):
     # item = ItemsMetadata.create(db_records[0][0].object_uuid, id_=rec_uuid)
     db.session.commit()
     # process_researchmap_queue({"item_uuid" : db_records_researchmap[0]}  ,MagicMock())
@@ -73,7 +73,7 @@ def test_get_achievement_type(app):
     assert get_achievement_type({"type" : ["hoge"]}) == None
 
 # .tox/c1/bin/pytest --cov=weko_items_ui tests/test_tasks.py::test_build_achievement -vv -s --cov-branch --cov-report=html --basetemp=/code/modules/weko_items-ui/.tox/c1/tmp
-def test_build_achievement(app, db_records_researchmap, open_search):
+def test_build_achievement(app, db_records_researchmap, open_search, user_activity_log_partition_table):
     recid = PersistentIdentifier.get_by_object(pid_type='recid', object_type='rec', object_uuid=db_records_researchmap[0]) 
     record,item = get_item(db_records_researchmap[0])
     # mapping = Mapping.get_record(item.item_type_id)

@@ -422,11 +422,16 @@ def open_search(app):
         record_mapping = json.load(f)
     with open("tests/data/mappings/author-v1.0.0.json","r") as f:
         author_mapping = json.load(f)
+        author_mapping["aliases"] = {author_alias_name: {}}
     with app.test_request_context():
         client.indices.create(index=record_index_name, body=record_mapping, ignore=[400])
         client.indices.put_alias(index=record_index_name, name=record_alias_name)
-        client.indices.create(index=author_index_name, body=author_mapping, ignore=[400])
-        client.indices.put_alias(index=author_index_name, name=author_alias_name)
+        # Create author index with alias
+        client.indices.create(
+            index=author_index_name,
+            body=author_mapping,
+            ignore=[400],
+        )
 
     yield client
 
@@ -719,12 +724,16 @@ def db_itemtype2(app, db):
         version_id=1,
         is_deleted=False,
     )
-
-    item_type_mapping = ItemTypeMapping(id=None,item_type_id=2, mapping=item_type_mapping)
-
+    # Create ItemTypeName and ItemType in a nested transaction to ensure atomicity
     with db.session.begin_nested():
         db.session.add(item_type_name)
         db.session.add(item_type)
+
+    item_type_mapping = ItemTypeMapping(
+        id=None, item_type_id=item_type.id, mapping=item_type_mapping
+    )
+    # Create ItemTypeMapping in a nested transaction to ensure atomicity
+    with db.session.begin_nested():
         db.session.add(item_type_mapping)
 
     return {"item_type_name": item_type_name, "item_type": item_type, "item_type_mapping":item_type_mapping}
@@ -761,12 +770,16 @@ def db_itemtype3(app, db):
         version_id=1,
         is_deleted=False,
     )
-
-    item_type_mapping = ItemTypeMapping(id=None,item_type_id=3, mapping=item_type_mapping)
-
+    # Create ItemTypeName and ItemType in a nested transaction to ensure atomicity
     with db.session.begin_nested():
         db.session.add(item_type_name)
         db.session.add(item_type)
+
+    item_type_mapping = ItemTypeMapping(
+        id=None, item_type_id=item_type.id, mapping=item_type_mapping
+    )
+    # Create ItemTypeMapping in a nested transaction to ensure atomicity
+    with db.session.begin_nested():
         db.session.add(item_type_mapping)
 
     return {"item_type_name": item_type_name, "item_type": item_type, "item_type_mapping":item_type_mapping}
@@ -803,12 +816,16 @@ def db_itemtype4(app, db):
         version_id=1,
         is_deleted=False,
     )
-
-    item_type_mapping = ItemTypeMapping(id=None,item_type_id=4, mapping=item_type_mapping)
-
+    # Create ItemTypeName and ItemType in a nested transaction to ensure atomicity
     with db.session.begin_nested():
         db.session.add(item_type_name)
         db.session.add(item_type)
+
+    item_type_mapping = ItemTypeMapping(
+        id=None, item_type_id=item_type.id, mapping=item_type_mapping
+    )
+    # Create ItemTypeMapping in a nested transaction to ensure atomicity
+    with db.session.begin_nested():
         db.session.add(item_type_mapping)
 
     return {"item_type_name": item_type_name, "item_type": item_type, "item_type_mapping":item_type_mapping}
@@ -818,6 +835,9 @@ def db_itemtype5(app, db):
     item_type_name = ItemTypeName(id=None,
         name="テストアイテムタイプ5", has_site_license=True, is_active=True
     )
+    # Create ItemTypeName in a nested transaction to ensure atomicity
+    with db.session.begin_nested():
+        db.session.add(item_type_name)
     item_type_schema = dict()
     with open("tests/data/itemtype4_schema.json", "r") as f:
         item_type_schema = json.load(f)
@@ -836,7 +856,7 @@ def db_itemtype5(app, db):
 
     item_type = ItemType(
         id=5,
-        name_id=5,
+        name_id=item_type_name.id,
         harvesting_type=True,
         schema=item_type_schema,
         form=item_type_form,
@@ -845,12 +865,15 @@ def db_itemtype5(app, db):
         version_id=1,
         is_deleted=False,
     )
-
-    item_type_mapping = ItemTypeMapping(id=5,item_type_id=5, mapping=item_type_mapping)
-
+    # Create ItemType in a nested transaction to ensure atomicity
     with db.session.begin_nested():
-        db.session.add(item_type_name)
         db.session.add(item_type)
+
+    item_type_mapping = ItemTypeMapping(
+        id=5, item_type_id=item_type.id, mapping=item_type_mapping
+    )
+    # Create ItemTypeMapping in a nested transaction to ensure atomicity
+    with db.session.begin_nested():
         db.session.add(item_type_mapping)
 
     return {"item_type_name": item_type_name, "item_type": item_type, "item_type_mapping":item_type_mapping}
@@ -887,54 +910,15 @@ def db_itemtype6(app, db):
         version_id=1,
         is_deleted=False,
     )
-
-    item_type_mapping = ItemTypeMapping(id=6,item_type_id=6, mapping=item_type_mapping)
-
     with db.session.begin_nested():
         db.session.add(item_type_name)
         db.session.add(item_type)
-        db.session.add(item_type_mapping)
 
-    return {"item_type_name": item_type_name, "item_type": item_type, "item_type_mapping":item_type_mapping}
-
-@pytest.fixture()
-def db_itemtype6(app, db):
-    item_type_name = ItemTypeName(id=6,
-        name="テストアイテムタイプ6", has_site_license=True, is_active=True
+    item_type_mapping = ItemTypeMapping(
+        id=6, item_type_id=item_type.id, mapping=item_type_mapping
     )
-    item_type_schema = dict()
-    with open("tests/data/itemtype5_schema.json", "r") as f:
-        item_type_schema = json.load(f)
-
-    item_type_form = dict()
-    with open("tests/data/itemtype5_form.json", "r") as f:
-        item_type_form = json.load(f)
-
-    item_type_render = dict()
-    with open("tests/data/itemtype5_render.json", "r") as f:
-        item_type_render = json.load(f)
-
-    item_type_mapping = dict()
-    with open("tests/data/itemtype5_mapping.json", "r") as f:
-        item_type_mapping = json.load(f)
-
-    item_type = ItemType(
-        id=6,
-        name_id=6,
-        harvesting_type=True,
-        schema=item_type_schema,
-        form=item_type_form,
-        render=item_type_render,
-        tag=1,
-        version_id=1,
-        is_deleted=False,
-    )
-
-    item_type_mapping = ItemTypeMapping(id=6,item_type_id=6, mapping=item_type_mapping)
 
     with db.session.begin_nested():
-        db.session.add(item_type_name)
-        db.session.add(item_type)
         db.session.add(item_type_mapping)
 
     return {"item_type_name": item_type_name, "item_type": item_type, "item_type_mapping":item_type_mapping}
@@ -971,19 +955,25 @@ def db_itemtype(app, db):
         version_id=1,
         is_deleted=False,
     )
-
-    item_type_mapping = ItemTypeMapping(id=None,item_type_id=1, mapping=item_type_mapping)
-
+    # Create ItemTypeName and ItemType in a nested transaction to ensure atomicity
     with db.session.begin_nested():
         db.session.add(item_type_name)
         db.session.add(item_type)
+
+    item_type_mapping = ItemTypeMapping(
+        id=None,
+        item_type_id=item_type.id,
+        mapping=item_type_mapping
+    )
+    # Create item type mapping
+    with db.session.begin_nested():
         db.session.add(item_type_mapping)
 
     return {"item_type_name": item_type_name, "item_type": item_type, "item_type_mapping":item_type_mapping}
 
 
 @pytest.fixture()
-def db_records(db,instance_path,users):
+def db_records(db, instance_path, users, user_activity_log_partition_table):
     with db.session.begin_nested():
         Location.query.delete()
         loc = Location(name="local", uri=instance_path, default=True)
@@ -1101,7 +1091,9 @@ def db_records_researchmap(db ,instance_path,users,db_author ,db_activity ,db_ad
 
 
 @pytest.fixture()
-def db_records_file(app,db,instance_path,users):
+def db_records_file(
+    app, db, instance_path, users, user_activity_log_partition_table
+):
     index_metadata = {
         'id': 1,
         'parent': 0,
@@ -1199,9 +1191,11 @@ def db_workflow(app, db, db_itemtype, users):
         action_date=datetime.strptime("2018/07/28 0:00:00", "%Y/%m/%d %H:%M:%S"),
         send_mail_setting={},
     )
+    # Get System Administrator role
+    role_sysadmin = Role.query.filter_by(name="System Administrator").first()
     flow_action_role1 = FlowActionRole(
         flow_action_id=1,
-        action_role=1,
+        action_role=role_sysadmin.id,
         action_role_exclude=False,
         action_user=1,
         action_user_exclude=False,
@@ -1209,7 +1203,7 @@ def db_workflow(app, db, db_itemtype, users):
     )
     flow_action_role2 = FlowActionRole(
         flow_action_id=1,
-        action_role=1,
+        action_role=role_sysadmin.id,
         action_role_exclude=False,
         action_user=1,
         action_user_exclude=False,
@@ -22599,19 +22593,23 @@ def db_itemtype_15(app, db):
         version_id=1,
         is_deleted=False,
     )
-
-    item_type_mapping = ItemTypeMapping(id=15,item_type_id=15, mapping=item_type_mapping)
-
+    # Create ItemTypeName and ItemTypeMapping instances
     with db.session.begin_nested():
         db.session.add(item_type_name)
         db.session.add(item_type)
+
+    item_type_mapping = ItemTypeMapping(
+        id=15, item_type_id=item_type.id, mapping=item_type_mapping
+    )
+    # Create ItemTypeMapping instance
+    with db.session.begin_nested():
         db.session.add(item_type_mapping)
 
     return {"item_type_name": item_type_name, "item_type": item_type, "item_type_mapping":item_type_mapping}
 
 
 @pytest.fixture()
-def records(db, es, instance_path):#, indextree, location, itemtypes, db_oaischema):
+def records(db, open_search, instance_path):#, indextree, location, itemtypes, db_oaischema):
     indexer = WekoIndexer()
     indexer.get_search_index()
 
@@ -23402,9 +23400,9 @@ def make_record(db, indexer, i, files, thumbnail=None):
         status=PIDStatus.REGISTERED,
     )
 
-    h1 = PIDNodeVersioning(parent=parent)
-    h1.insert_child(child=recid)
-    h1.insert_child(child=recid_v1)
+    h1 = PIDNodeVersioning(parent)
+    h1.insert_child(recid)
+    h1.insert_child(recid_v1)
     PIDNodeDraft(pid=recid).insert_child(depid)
     PIDNodeDraft(pid=recid_v1).insert_child(depid_v1)
 
@@ -23560,3 +23558,22 @@ def make_zip():
         fp.seek(0)
         return fp
     return factory
+
+
+@pytest.fixture
+def user_activity_log_partition_table(app, db):
+    """Create user activity log partition."""
+    # Create partition for current month
+    now = datetime.now()
+    start = now.date().replace(day=1)
+    end = (start + timedelta(days=31)).replace(day=1)
+    partition_name = f"user_activity_logs_{now.year}_{now.month:02d}"
+    create_partition_sql = f"""
+        CREATE TABLE IF NOT EXISTS {partition_name}
+        PARTITION OF user_activity_logs
+        FOR VALUES FROM ('{start}') TO ('{end}');
+    """
+
+    with db.session.begin_nested():
+        db.session.execute(create_partition_sql)
+    db.session.commit()

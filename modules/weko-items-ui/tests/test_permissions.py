@@ -13,7 +13,7 @@ from weko_records_ui.permissions import page_permission_factory
 
 # def edit_permission_factory(record, **kwargs):
 #     def can(self):
-# .tox/c1/bin/pytest --cov=weko_items_ui tests/test_permissions.py::edit_permission_factory  -vv -s --cov-branch --cov-report=term --basetemp=/code/modules/weko-items-ui/.tox/c1/tmp
+# .tox/c1/bin/pytest --cov=weko_items_ui tests/test_permissions.py::test_edit_permission_factory  -vv -s --cov-branch --cov-report=term --basetemp=/code/modules/weko-items-ui/.tox/c1/tmp
 def test_edit_permission_factory(db_records):
     depid, recid, parent, doi, record, item = db_records[0]
     expect = page_permission_factory(record, flg='Edit').can()
