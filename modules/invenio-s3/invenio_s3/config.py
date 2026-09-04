@@ -29,7 +29,7 @@ If set to a value it will be passed as ``region_name`` to boto3 `client
 <https://boto3.readthedocs.io/en/latest/reference/core/session.html#boto3.session.Session.client>`_.
 """
 
-S3_ACCCESS_KEY_ID = None
+S3_ACCESS_KEY_ID = None
 """The access key to use when creating the client.
 
 This is entirely optional, and if not provided, the credentials configured for
@@ -39,7 +39,7 @@ See `Configuring Credentials
 for more information.
 """
 
-S3_SECRECT_ACCESS_KEY = None
+S3_SECRET_ACCESS_KEY = None
 """The secret key to use when creating the client.
 
 This is entirely optional, and if not provided, the credentials configured for
