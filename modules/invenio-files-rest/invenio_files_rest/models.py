@@ -301,6 +301,16 @@ class Location(db.Model, Timestamp):
 
     max_file_size = db.Column(db.BigInteger, nullable=True)
 
+    s3_default_block_size = db.Column(db.BigInteger, nullable=True)
+
+    s3_maximum_number_of_parts = db.Column(db.BigInteger, nullable=True)
+
+    s3_region_name = db.Column(db.String(128), nullable=True)
+
+    s3_signature_version = db.Column(db.String(20), nullable=True)
+
+    s3_url_expiration = db.Column(db.BigInteger, nullable=True)
+
     @validates('name')
     def validate_name(self, key, name):
         """Validate name."""
