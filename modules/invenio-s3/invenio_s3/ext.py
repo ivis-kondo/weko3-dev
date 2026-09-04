@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2018 Esteban J. G. Gabancho.
+# Copyright (C) 2018, 2019 Esteban J. G. Gabancho.
 #
 # Invenio-S3 is free software; you can redistribute it and/or modify it
 # under the terms of the MIT License; see LICENSE file for more details.
@@ -64,6 +64,14 @@ class InvenioS3(object):
             key=access_key,
             secret=secret_key,
             client_kwargs={},
+            config_kwargs={
+                "s3": {
+                    "addressing_style": "path"
+                },
+                "signature_version": current_app.config.get(
+                    "S3_SIGNATURE_VERSION", "s3v4"
+                ),
+            }
         )
 
         s3_endpoint = current_app.config.get('S3_ENDPOINT_URL', None)
@@ -82,7 +90,8 @@ class InvenioS3(object):
             region_name = location.s3_region_name
             if region_name:
                 info['client_kwargs']['region_name'] = region_name
-            info['config_kwargs']['signature_version'] = location.s3_signature_version
+            if location.s3_signature_version:
+                info['config_kwargs']['signature_version'] = location.s3_signature_version
 
         return info
 

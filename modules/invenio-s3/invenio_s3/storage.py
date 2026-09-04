@@ -7,7 +7,8 @@
 """S3 file storage interface."""
 from __future__ import absolute_import, print_function
 
-from functools import partial
+from functools import partial, wraps
+from math import ceil
 
 import s3fs
 from flask import current_app
@@ -19,12 +20,47 @@ from .config import S3_SEND_FILE_DIRECTLY
 from .helpers import redirect_stream
 
 
+def set_blocksize(f):
+    """Decorator to set the correct block size according to file size."""
+    @wraps(f)
+    def inner(self, *args, **kwargs):
+        size = kwargs.get('size', None)
+
+        block_size = (
+            size // current_app.config['S3_MAXIMUM_NUMBER_OF_PARTS']  # Integer
+            if size
+            else current_app.config['S3_DEFAULT_BLOCK_SIZE']
+        )
+        if self.location:
+            if self.location.type != None and self.location.s3_default_block_size:
+                block_size = (
+                    ceil(size / self.location.s3_maximum_number_of_parts)
+                    if size and self.location.s3_maximum_number_of_parts
+                    else self.location.s3_default_block_size
+                )
+        if block_size > self.block_size:
+            self.block_size = block_size
+        return f(self, *args, **kwargs)
+
+    return inner
+
 class S3FSFileStorage(PyFSFileStorage):
     """File system storage using Amazon S3 API for accessing files."""
 
     def __init__(self, fileurl, **kwargs):
         """Storage initialization."""
-        super(S3FSFileStorage, self).__init__(fileurl, **kwargs)
+        self.block_size = current_app.config['S3_DEFAULT_BLOCK_SIZE']
+        if kwargs.get("location"):
+            location = kwargs.get("location")
+            if location.type is not None and location.s3_default_block_size:
+                self.block_size = location.s3_default_block_size
+        super(S3FSFileStorage, self).__init__(
+            fileurl,
+            size=kwargs.get("size"),
+            modified=kwargs.get("modified"),
+            clean_dir=kwargs.get("clean_dir", True),
+            location=kwargs.get("location"),
+        )
 
     def _get_fs(self, mode='rb', *args, **kwargs):
         """Get PyFilesystem instance and S3 real path."""
@@ -36,6 +72,7 @@ class S3FSFileStorage(PyFSFileStorage):
 
         return (fs, self.fileurl)
 
+    @set_blocksize
     def initialize(self, size=0):
         """Initialize file on storage and truncate to given size."""
         fs, path = self._get_fs(mode='wb')
@@ -76,6 +113,7 @@ class S3FSFileStorage(PyFSFileStorage):
         self.remove(fs, path)
         return True
 
+    @set_blocksize
     def update(self,
                incoming_stream,
                seek=0,
@@ -85,7 +123,12 @@ class S3FSFileStorage(PyFSFileStorage):
         """Update a file in the file system."""
         old_fp = self.open(mode='rb')
         updated_fp = S3FSFileStorage(
-            self.fileurl, size=self._size).open(mode='wb')
+            self.fileurl,
+            size=self._size,
+            modified=self._modified,
+            clean_dir=self.clean_dir,
+            location=self.location
+        ).open(mode='wb')
         try:
             if seek >= 0:
                 to_write = seek
@@ -118,30 +161,48 @@ class S3FSFileStorage(PyFSFileStorage):
 
         return bytes_written, checksum
 
-    def send_file(self, filename, mimetype=None, restricted=True, checksum=None,
-                  trusted=False, chunk_size=None, as_attachment=False):
+    def send_file(
+        self,
+        filename,
+        mimetype=None,
+        restricted=True,
+        checksum=None,
+        trusted=False,
+        chunk_size=None,
+        as_attachment=False
+    ):
         """Send the file to the client."""
         s3_send_file_directly = current_app.config.get('S3_SEND_FILE_DIRECTLY', None)
-        default_location = Location.query.filter_by(default=True).first()
-
-        if default_location.type == 's3':
-            s3_send_file_directly = default_location.s3_send_file_directly
+        s3_type_values = [
+            current_app.config.get("S3_LOCATION_TYPE_S3_PATH_VALUE"),
+            current_app.config.get("S3_LOCATION_TYPE_S3_VIRTUAL_HOST_VALUE")
+        ]
+        # Check if location is set to S3 type
+        if self.location and self.location.type \
+            and (self.location.type in s3_type_values):
+            s3_send_file_directly = self.location.s3_send_file_directly
 
         if s3_send_file_directly:
-            return super(S3FSFileStorage, self).send_file(filename,
-                                                          mimetype=mimetype,
-                                                          restricted=restricted,
-                                                          checksum=checksum,
-                                                          trusted=trusted,
-                                                          chunk_size=chunk_size,
-                                                          as_attachment=as_attachment)
+            return super(S3FSFileStorage, self).send_file(
+                filename,
+                mimetype=mimetype,
+                restricted=restricted,
+                checksum=checksum,
+                trusted=trusted,
+                chunk_size=chunk_size,
+                as_attachment=as_attachment
+            )
+
         try:
             fs, path = self._get_fs(mode='rb')
             s3_url_builder = partial(
                 fs.url, path, expires=current_app.config['S3_URL_EXPIRATION']
             )
             if self.location:
-                if self.location.type != None:
+                if (
+                    self.location.type in s3_type_values
+                    and self.location.s3_url_expiration
+                ):
                     s3_url_builder = partial(
                         fs.url, path, expires=self.location.s3_url_expiration
                     )
@@ -168,6 +229,7 @@ class S3FSFileStorage(PyFSFileStorage):
         except Exception as e:
             raise StorageError('Could not send file: {}'.format(e))
 
+    @set_blocksize
     def copy(self, src, *args, **kwargs):
         """Copy data from another file instance.
 
@@ -183,6 +245,14 @@ class S3FSFileStorage(PyFSFileStorage):
                 super(S3FSFileStorage, self).copy(src, *args, **kwargs)
         else:
             super(S3FSFileStorage, self).copy(src, *args, **kwargs)
+
+    @set_blocksize
+    def save(self, *args, **kwargs):
+        """Save incoming stream to storage.
+
+        Just overwrite parent method to allow set the correct block size.
+        """
+        return super(S3FSFileStorage, self).save(*args, **kwargs)
 
 
 def s3fs_storage_factory(**kwargs):

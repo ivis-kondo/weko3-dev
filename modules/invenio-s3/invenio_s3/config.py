@@ -19,6 +19,16 @@ If set to a value (including the "http/https" scheme) it will be passed as
 <https://boto3.readthedocs.io/en/latest/reference/core/session.html#boto3.session.Session.client>`_.
 """
 
+S3_REGION_NAME = None
+"""S3 region name
+
+This is entirely optional, and if not provided, the region name will be
+automatically set to 'us-east-1'.
+
+If set to a value it will be passed as ``region_name`` to boto3 `client
+<https://boto3.readthedocs.io/en/latest/reference/core/session.html#boto3.session.Session.client>`_.
+"""
+
 S3_ACCCESS_KEY_ID = None
 """The access key to use when creating the client.
 
@@ -64,3 +74,18 @@ S3_SEND_FILE_DIRECTLY = True
 If this flag is false, system will redirects the file to the client.
 When redirecting, S3_ENDPOINT_URL need to be set except for US region.
 """
+
+S3_MAXIMUM_NUMBER_OF_PARTS = 10000
+"""Maximum number of parts to be used.
+See `AWS Multipart Upload Overview
+<https://docs.aws.amazon.com/AmazonS3/latest/dev/mpuoverview.html>`_ for more
+information.
+"""
+
+S3_DEFAULT_BLOCK_SIZE = 5 * 2**20
+"""Default block size value used to send multi-part uploads to S3.
+Typically 5Mb is minimum allowed by the API."""
+
+S3_LOCATION_TYPE_S3_PATH_VALUE = 's3'
+
+S3_LOCATION_TYPE_S3_VIRTUAL_HOST_VALUE = 's3_vh'

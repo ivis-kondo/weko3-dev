@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2018 Esteban J. G. Gabancho.
+# Copyright (C) 2018, 2019 Esteban J. G. Gabancho.
 #
 # Invenio-S3 is free software; you can redistribute it and/or modify it
 # under the terms of the MIT License; see LICENSE file for more details.
@@ -46,8 +46,6 @@ def redirect_stream(s3_url_builder,
     headers['Content-Length'] = size
     if content_md5:
         headers['Content-MD5'] = content_md5
-    # Add redirect url as localtion
-    headers['Location'] = url
 
     if not trusted:
         # Sanitize MIME type
