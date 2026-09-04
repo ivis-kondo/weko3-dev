@@ -122,6 +122,10 @@ FILES_REST_TASK_WAIT_MAX_SECONDS = 600
 FILES_REST_LOCATION_TYPE_LIST = [('s3', 'S3 Path'), ('s3_vh', 'S3 Virtual Host')]
 """Location type list"""
 
+FILES_REST_LOCATION_TYPE_S3_PATH_VALUE = 's3'
+
+FILES_REST_LOCATION_TYPE_S3_VIRTUAL_HOST_VALUE = 's3_vh'
+
 FILES_REST_UPLOAD_OWNER_FACTORIES = 'invenio_files_rest.serializer.file_uploaded_owner'
 """file update version"""
 
