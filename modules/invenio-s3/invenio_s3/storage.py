@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2018 Esteban J. G. Gabancho.
+# Copyright (C) 2018, 2019, 2020, 2021 Esteban J. G. Gabancho.
 #
 # Invenio-S3 is free software; you can redistribute it and/or modify it
 # under the terms of the MIT License; see LICENSE file for more details.
 """S3 file storage interface."""
-from __future__ import absolute_import, print_function
 
 from functools import partial, wraps
 from math import ceil
@@ -15,6 +14,8 @@ from flask import current_app
 from invenio_files_rest.models import Location
 from invenio_files_rest.errors import StorageError
 from invenio_files_rest.storage import PyFSFileStorage, pyfs_storage_factory
+
+from invenio_files_rest.helpers import to_s3_uri
 
 from .config import S3_SEND_FILE_DIRECTLY
 from .helpers import redirect_stream
@@ -67,10 +68,16 @@ class S3FSFileStorage(PyFSFileStorage):
         if self.location is None or self.location.type == None:
             return super(S3FSFileStorage, self)._get_fs(mode=mode, *args, **kwargs)
 
+        url = self.fileurl
+        if (self.location.type ==
+                current_app.config.get('S3_LOCATION_TYPE_S3_VIRTUAL_HOST_VALUE')
+                and url.startswith('https://')):
+            url = to_s3_uri(url)
+
         info = current_app.extensions['invenio-s3'].init_s3fs_info(location=self.location, mode=mode)
         fs = s3fs.S3FileSystem(default_block_size=self.block_size, **info)
 
-        return (fs, self.fileurl)
+        return (fs, url)
 
     @set_blocksize
     def initialize(self, size=0):
@@ -84,8 +91,9 @@ class S3FSFileStorage(PyFSFileStorage):
             to_write = size
             fs_chunk_size = fp.blocksize  # Force write every time
             while to_write > 0:
-                current_chunk_size = (to_write if to_write <= fs_chunk_size
-                                      else fs_chunk_size)
+                current_chunk_size = (
+                    to_write if to_write <= fs_chunk_size else fs_chunk_size
+                )
                 fp.write(b'\0' * current_chunk_size)
                 to_write -= current_chunk_size
         except Exception:
@@ -114,12 +122,14 @@ class S3FSFileStorage(PyFSFileStorage):
         return True
 
     @set_blocksize
-    def update(self,
-               incoming_stream,
-               seek=0,
-               size=None,
-               chunk_size=None,
-               progress_callback=None):
+    def update(
+        self,
+        incoming_stream,
+        seek=0,
+        size=None,
+        chunk_size=None,
+        progress_callback=None
+    ):
         """Update a file in the file system."""
         old_fp = self.open(mode='rb')
         updated_fp = S3FSFileStorage(
@@ -134,8 +144,11 @@ class S3FSFileStorage(PyFSFileStorage):
                 to_write = seek
                 fs_chunk_size = updated_fp.blocksize
                 while to_write > 0:
-                    current_chunk_size = (to_write if to_write <= fs_chunk_size
-                                          else fs_chunk_size)
+                    current_chunk_size = (
+                        to_write
+                        if to_write <= fs_chunk_size
+                        else fs_chunk_size
+                    )
                     updated_fp.write(old_fp.read(current_chunk_size))
                     to_write -= current_chunk_size
 
@@ -144,15 +157,19 @@ class S3FSFileStorage(PyFSFileStorage):
                 updated_fp,
                 chunk_size=chunk_size,
                 size=size,
-                progress_callback=progress_callback)
+                progress_callback=progress_callback,
+            )
 
             if (bytes_written + seek) < self._size:
                 old_fp.seek((bytes_written + seek))
                 to_write = self._size - (bytes_written + seek)
                 fs_chunk_size = updated_fp.blocksize
                 while to_write > 0:
-                    current_chunk_size = (to_write if to_write <= fs_chunk_size
-                                          else fs_chunk_size)
+                    current_chunk_size = (
+                        to_write
+                        if to_write <= fs_chunk_size
+                        else fs_chunk_size
+                    )
                     updated_fp.write(old_fp.read(current_chunk_size))
                     to_write -= current_chunk_size
         finally:

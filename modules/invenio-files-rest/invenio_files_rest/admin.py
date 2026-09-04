@@ -11,7 +11,9 @@
 from __future__ import absolute_import, print_function
 
 import os
+import re
 import uuid
+from urllib.parse import urlparse
 
 from flask import current_app, flash, url_for
 from flask_admin.actions import action
@@ -42,6 +44,17 @@ def require_slug(form, field):
     if not slug_pattern.match(field.data):
         raise ValidationError(_("Invalid location name."))
 
+_AWS_S3_HOST_RE = re.compile(
+    r'^(?P<bucket>[a-z0-9][a-z0-9-]*)\.s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com$'
+)
+"""Matches an AWS S3 virtual-hosted-style host, e.g.
+``<bucket>.s3.amazonaws.com``, ``<bucket>.s3.<region>.amazonaws.com``, or
+the legacy ``<bucket>.s3-<region>.amazonaws.com`` form. The bucket group
+deliberately excludes dots and a leading ``s3`` is not itself restricted
+here (that is rejected separately below).
+"""
+
+
 def validate_uri(form, field):
     """
     Validate the URI field based on the value of the 'type' field.
@@ -51,18 +64,60 @@ def validate_uri(form, field):
     that the URI field starts with 'https://'. If the condition is not
     met, a ValidationError is raised.
 
+    Beyond that, it also rejects URLs that
+    ``invenio_files_rest.helpers.to_s3_uri`` (used to resolve the actual
+    S3 path when a file under this Location is accessed) is known to
+    misinterpret:
+
+    - A bucket-specific virtual-hosted URL whose bucket name itself
+      starts with ``s3`` (e.g. ``https://s3-assets.s3.amazonaws.com/``)
+      would be misread as a bucket-less path-style URL, silently losing
+      the bucket name.
+    - A bucket name containing dots (e.g.
+      ``https://my.bucket.name.s3.amazonaws.com/``) would be truncated
+      to just the first label.
+
     Args:
         form (wtforms.Form): The form object containing the fields.
         field (wtforms.Field): The field being validated (URI field).
 
     Raises:
         ValidationError: If the URI does not start with 'https://' when
-        the 'type' field is set to 'FILES_REST_LOCATION_TYPE_S3_VIRTUAL_HOST_VALUE'.
+        the 'type' field is set to 'FILES_REST_LOCATION_TYPE_S3_VIRTUAL_HOST_VALUE',
+        or if the URL is one ``to_s3_uri`` would misinterpret.
     """
-    if form.type.data == \
-            current_app.config['FILES_REST_LOCATION_TYPE_S3_VIRTUAL_HOST_VALUE'] and \
-            not field.data.startswith('https://'):
+    if form.type.data != \
+            current_app.config['FILES_REST_LOCATION_TYPE_S3_VIRTUAL_HOST_VALUE']:
+        return
+
+    uri = field.data
+    if not uri.startswith('https://'):
         raise ValidationError(_("Invalid URL. It should start with https://"))
+
+    parsed = urlparse(uri)
+    if parsed.netloc.startswith('s3'):
+        # to_s3_uri() treats any URL whose host starts with "s3" as
+        # bucket-less path-style, so the bucket must be the first path
+        # segment (e.g. https://s3.<region>.amazonaws.com/<bucket>/).
+        if not parsed.path.strip('/'):
+            raise ValidationError(_(
+                "This URL looks like a bucket-specific virtual-hosted "
+                "endpoint (host starts with 's3'), which would be "
+                "misread as a bucket-less path-style endpoint and lose "
+                "the bucket name. Use a path-style URL instead, e.g. "
+                "https://s3.<region>.amazonaws.com/<bucket>/"
+            ))
+    else:
+        # Otherwise to_s3_uri() treats it as virtual-hosted-style and
+        # takes everything before the first dot in the host as the
+        # bucket name -- so only a non-dotted bucket on a recognized AWS
+        # S3 host is safe.
+        if not _AWS_S3_HOST_RE.match(parsed.netloc):
+            raise ValidationError(_(
+                "Invalid S3 Virtual Host URL. The host must be "
+                "<bucket>.s3[.<region>].amazonaws.com, where <bucket> "
+                "does not start with 's3' and does not contain dots."
+            ))
 
 def link(text, link_func):
     """Generate a object formatter for links.."""

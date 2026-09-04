@@ -42,12 +42,66 @@ def test_validate_uri(app):
         def __init__(self, type):
             self.type = TestType(type)
 
-    # type is s3, uri is wrong uri -> not raise error
-    assert validate_uri(TestForm("s3"),TestField('wrong_uri')) is None
-    # type is s3_vh, uri is correct uri -> not raise error
-    assert validate_uri(TestForm("s3_vh"),TestField('https://correct_uri')) is None
-    # type is s3_vh, uri is wrong uri -> raise error
-    pytest.raises(ValidationError, validate_uri, TestForm("s3_vh"), TestField("wrong_uri"))
+    with app.app_context():
+        # type is s3, uri is not even a URL -> not raise error (this
+        # validator only applies to s3_vh)
+        assert validate_uri(TestForm("s3"), TestField('wrong_uri')) is None
+        # type is s3_vh, uri does not start with https:// -> raise error
+        pytest.raises(
+            ValidationError, validate_uri, TestForm("s3_vh"),
+            TestField("wrong_uri"))
+        # type is s3_vh, uri is a valid AWS S3 virtual-hosted URL
+        # (path-style) -> not raise error
+        assert validate_uri(
+            TestForm("s3_vh"),
+            TestField('https://s3.us-east-1.amazonaws.com/my-bucket/'),
+        ) is None
+        # type is s3_vh, uri is a valid AWS S3 virtual-hosted URL
+        # (bucket-in-host) -> not raise error
+        assert validate_uri(
+            TestForm("s3_vh"),
+            TestField('https://my-bucket.s3.us-east-1.amazonaws.com/'),
+        ) is None
+
+
+@pytest.mark.parametrize(
+    'uri',
+    [
+        # bucket-specific virtual-hosted URL whose bucket name itself
+        # starts with "s3" -- to_s3_uri() would misread this as a
+        # bucket-less path-style URL and lose the bucket name.
+        'https://s3-assets.s3.us-east-1.amazonaws.com/',
+        # bucket name containing dots -- to_s3_uri() would truncate it
+        # to just the first label.
+        'https://my.bucket.name.s3.amazonaws.com/',
+        # non-AWS S3-compatible endpoint (e.g. Wasabi) -- not supported.
+        'https://my-bucket.s3.wasabisys.com/',
+        # generic path-style endpoint with no bucket segment in the path.
+        'https://s3.us-east-1.amazonaws.com/',
+    ],
+    ids=[
+        'bucket name starting with s3 (virtual-hosted)',
+        'bucket name containing dots',
+        'non-AWS S3-compatible endpoint',
+        'path-style endpoint with no bucket in path',
+    ],
+)
+def test_validate_uri_rejects_known_limitations(app, uri):
+    """Test that validate_uri rejects URLs to_s3_uri() cannot handle."""
+    class TestField(object):
+        def __init__(self, data):
+            self.data = data
+    class TestType(object):
+        def __init__(self, type):
+            self.data = type
+    class TestForm(object):
+        def __init__(self, type):
+            self.type = TestType(type)
+
+    with app.app_context():
+        pytest.raises(
+            ValidationError, validate_uri, TestForm("s3_vh"),
+            TestField(uri))
 
 
 def test_admin_views(app, db, dummy_location):

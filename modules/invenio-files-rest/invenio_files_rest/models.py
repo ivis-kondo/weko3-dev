@@ -39,6 +39,7 @@ from __future__ import absolute_import, print_function
 import mimetypes
 import os
 import re
+import shutil
 import sys
 import uuid
 from datetime import datetime
@@ -64,6 +65,7 @@ from .errors import BucketLockedError, FileInstanceAlreadySetError, \
     InvalidOperationError, MultipartAlreadyCompleted, \
     MultipartInvalidChunkSize, MultipartInvalidPartNumber, \
     MultipartInvalidSize, MultipartMissingParts, MultipartNotCompleted
+from .helpers import to_s3_uri
 from .proxies import current_files_rest
 
 slug_pattern = re.compile('^[a-z][a-z0-9-]+$')
@@ -945,7 +947,38 @@ class FileInstance(db.Model, Timestamp):
                     file_type, '.pdf')
 
                 if not os.path.isfile(pdf_dir + pdf_filename):
-                    convert_to(pdf_dir, self.uri)
+                    target_uri = self.uri
+                    if self.uri.startswith('https://'):
+                        # S3 Virtual Host locations store ``uri`` as an
+                        # https:// URL; normalize it to s3:// so the
+                        # s3://-prefix check below can detect it uniformly
+                        # with path-style S3 locations.
+                        self.uri = to_s3_uri(self.uri)
+                        target_uri = self.uri
+
+                    if target_uri.startswith('s3://'):
+                        # ``convert_to`` shells out to libreoffice, which
+                        # can only operate on a local file path -- download
+                        # the S3 object to a local temp file first.
+                        convert_dir = path + '/convert_' + str(self.id)
+                        target_uri = convert_dir + '/' + target_uri.split('/')[-1]
+                        if os.path.exists(convert_dir):
+                            shutil.rmtree(convert_dir)
+                        os.makedirs(convert_dir)
+                        fp = self.storage(**kwargs).open(mode='rb')
+                        try:
+                            data = fp.read()
+                        finally:
+                            fp.close()
+                        with open(target_uri, 'wb') as f:
+                            f.write(data)
+
+                    try:
+                        convert_to(pdf_dir, target_uri)
+                    finally:
+                        if target_uri != self.uri and os.path.exists(
+                                os.path.dirname(target_uri)):
+                            shutil.rmtree(os.path.dirname(target_uri))
 
                 self.uri = pdf_dir + pdf_filename
                 self.size = os.path.getsize(pdf_dir + pdf_filename)

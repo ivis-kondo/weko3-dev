@@ -130,7 +130,6 @@ window.onload = function(){
   document.querySelector("label[for='readonly_secret_key']").innerHTML += '<strong style="color: red;">*</strong>';
   document.querySelector("label[for='s3_region_name']").innerHTML += '<strong style="color: red;">*</strong>';
   checkLocationType()
-  typeSpan.addEventListener('DOMSubtreeModified', checkLocationType)
 }
 </script>
 {% endblock %}
