@@ -119,7 +119,7 @@ FILES_REST_TASK_WAIT_INTERVAL = 2
 FILES_REST_TASK_WAIT_MAX_SECONDS = 600
 """Maximum number of seconds to wait for a task to finish."""
 
-FILES_REST_LOCATION_TYPE_LIST = [('s3', 'Amazon S3')]
+FILES_REST_LOCATION_TYPE_LIST = [('s3', 'S3 Path'), ('s3_vh', 'S3 Virtual Host')]
 """Location type list"""
 
 FILES_REST_UPLOAD_OWNER_FACTORIES = 'invenio_files_rest.serializer.file_uploaded_owner'
