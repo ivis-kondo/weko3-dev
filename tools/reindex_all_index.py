@@ -251,7 +251,6 @@ class ReindexAllIndexRunner(object):
             self.req_args["auth"] = self.auth
 
         self.version = "v7"
-        self.percolator_prefix = "oaiset-"
         self.modules_dir = "/code/modules/"
         self.prefix = args.prefix
         self.today_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00")
@@ -721,18 +720,6 @@ class ReindexAllIndexRunner(object):
             return {"range": {"_updated": {"lt": self.until_date}}}
         return {"range": {"_updated": {"lt": self.today_str}}}
 
-    def _make_id_prefix_filter(self, starts_with):
-        """Create a filter that includes or excludes percolator IDs by their prefix."""
-        source = "doc['_id'].value.startsWith(params.prefix)" if starts_with else "!doc['_id'].value.startsWith(params.prefix)"
-        return {
-            "script": {
-                "script": {
-                    "source": source,
-                    "params": {"prefix": self.percolator_prefix},
-                }
-            }
-        }
-
     def _make_alias_actions(self, index_name):
         """Build alias actions for the destination index."""
         actions = []
@@ -861,33 +848,11 @@ class ReindexAllIndexRunner(object):
         if chunk:
             yield chunk
 
-    def _build_author_reindex_body(self, source_index, dest_index, pkids=None, percolator_prefix=None):
+    def _build_author_reindex_body(self, source_index, dest_index, pkids=None):
         """Build the reindex request body used for author documents."""
         filters = []
         if pkids is not None:
             filters.append({"terms": {self.pkid_field: pkids}})
-        if percolator_prefix is not None:
-            filters.append(
-                {
-                    "script": {
-                        "script": {
-                            "source": "doc['_id'].value.startsWith(params.prefix)",
-                            "params": {"prefix": percolator_prefix},
-                        }
-                    }
-                }
-            )
-        else:
-            filters.append(
-                {
-                    "script": {
-                        "script": {
-                            "source": "!doc['_id'].value.startsWith(params.prefix)",
-                            "params": {"prefix": self.percolator_prefix},
-                        }
-                    }
-                }
-            )
 
         return {
             "source": {
@@ -898,7 +863,7 @@ class ReindexAllIndexRunner(object):
             "dest": {"index": dest_index},
         }
 
-    def _run_author_reindex_by_db_pkid(self, source_index, dest_index, percolator_index):
+    def _run_author_reindex_by_db_pkid(self, source_index, dest_index):
         """Reindex author documents by fetching pk_id values from the database."""
         self._log_info("[Author] start DB-based reindex")
         self._log_info(
@@ -925,7 +890,6 @@ class ReindexAllIndexRunner(object):
                 source_index=source_index,
                 dest_index=dest_index,
                 pkids=pkid_chunk,
-                percolator_prefix=None,
             )
 
             result_main = self._run_reindex_or_raise(body_main).json()
@@ -941,32 +905,17 @@ class ReindexAllIndexRunner(object):
                 )
             )
 
-        total_created_percolator = 0
-        if self.gte_date or self.until_date:
-            self._log_info("[Author] percolator reindex with oaiset-* IDs (full scan)")
-            body_percolator = self._build_author_reindex_body(
-                source_index=source_index,
-                dest_index=percolator_index,
-                pkids=None,
-                percolator_prefix=self.percolator_prefix,
-            )
-            result_percolator = self._run_reindex_or_raise(body_percolator).json()
-            total_created_percolator = result_percolator.get("created", 0)
-            self._log_info("[Author] percolator created={}".format(total_created_percolator))
-
         self._log_info(
-            "[Author] done chunks={} total_pkids={} total_created_main={} total_created_percolator={}".format(
+            "[Author] done chunks={} total_pkids={} total_created_main={}".format(
                 chunk_no,
                 total_pkids,
                 total_created_main,
-                total_created_percolator,
             )
         )
 
     def _run_main_index_reindex(self):
         """Reindex the main content indexes from ES6 to ES7."""
         self._log_step_start("main_index_reindex")
-        percolator_body = {"properties": {"query": {"type": "percolator"}}}
 
         for index_name in self.mappings:
             index_step = "index_reindex:{}".format(index_name)
@@ -1012,8 +961,6 @@ class ReindexAllIndexRunner(object):
                         reindex_body["source"]["size"] = prechecked_size
 
                 updated_range_query = self._make_updated_range_query()
-                filter_id_starts_with = self._make_id_prefix_filter(True)
-                filter_id_not_starts_with = self._make_id_prefix_filter(False)
 
                 res = requests.get(self.es7_url + index_name, **self.req_args)
                 if res.status_code == 200:
@@ -1041,24 +988,6 @@ class ReindexAllIndexRunner(object):
                     self._log_info("setting alias for new index")
                     self._log_step_end("create_index:{}".format(index_name))
 
-                index_percolator = index_name + "-percolators"
-                res = requests.get(self.es7_url + index_percolator, **self.req_args)
-                if res.status_code == 200:
-                    self._log_info("Index {} already exists, skipping creation.".format(index_percolator))
-                else:
-                    self._log_step_start("create_percolator:{}".format(index_percolator))
-                    self._log_info("Creating index: {}".format(index_percolator))
-                    percolator_definition = copy.deepcopy(prepared_index_definition)
-                    percolator_definition["mappings"]["properties"].update(percolator_body["properties"])
-                    self._request_or_raise(
-                        "PUT",
-                        self.es7_url + index_percolator + "?pretty",
-                        json=percolator_definition,
-                        **self.req_args
-                    )
-                    self._log_info("Created index: {}".format(index_percolator))
-                    self._log_step_end("create_percolator:{}".format(index_percolator))
-
                 self._log_step_start("speed_settings:{}".format(index_name))
                 self._request_or_raise(
                     "PUT",
@@ -1083,10 +1012,7 @@ class ReindexAllIndexRunner(object):
                     self._run_non_author_reindex(
                         reindex_body,
                         index_name,
-                        index_percolator,
                         updated_range_query,
-                        filter_id_not_starts_with,
-                        filter_id_starts_with,
                     )
                     self._log_step_end("reindex_non_author:{}".format(index_name))
                 else:
@@ -1094,7 +1020,6 @@ class ReindexAllIndexRunner(object):
                     self._run_author_reindex_by_db_pkid(
                         source_index=index_name,
                         dest_index=index_name,
-                        percolator_index=index_percolator,
                     )
                     self._log_step_end("reindex_author:{}".format(index_name))
 
@@ -1127,20 +1052,11 @@ class ReindexAllIndexRunner(object):
         self,
         reindex_body,
         index_name,
-        index_percolator,
         updated_range_query,
-        filter_id_not_starts_with,
-        filter_id_starts_with,
     ):
         """Reindex non-author content with either a date window or a full range."""
         if self.gte_date or self.until_date:
             reindex_body["source"]["query"]["bool"]["must"] = [updated_range_query]
-            reindex_body["source"]["query"]["bool"]["filter"] = [filter_id_not_starts_with]
-            self._run_reindex_or_raise(reindex_body)
-
-            reindex_body["source"]["query"]["bool"]["must"] = []
-            reindex_body["source"]["query"]["bool"]["filter"] = [filter_id_starts_with]
-            reindex_body["dest"]["index"] = index_percolator
             self._run_reindex_or_raise(reindex_body)
 
             self._log_info("Second reindex from ES6 to ES7 (>= today 00:00:00)")
@@ -1156,7 +1072,6 @@ class ReindexAllIndexRunner(object):
                 ] if start_ts and end_ts else (
                     [{"range": {"_updated": {"gte": start_ts}}}] if start_ts else [{"range": {"_updated": {"lt": end_ts}}}]
                 )
-                body_main["source"]["query"]["bool"]["filter"] = [filter_id_not_starts_with]
                 self._log_info(
                     "window {}/{}: range {} -> {} for index {}".format(
                         idx,
@@ -1171,7 +1086,6 @@ class ReindexAllIndexRunner(object):
                 self._log_info("reindex window ok: {} -> {}".format(start_ts, end_ts))
         else:
             reindex_body["source"]["query"]["bool"]["must"] = [updated_range_query]
-            reindex_body["source"]["query"]["bool"]["filter"] = [filter_id_not_starts_with]
             self._run_reindex_or_raise(reindex_body)
 
             self._log_info("First reindex from ES6 to ES7 (< today 00:00:00)")
