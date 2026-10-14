@@ -252,6 +252,10 @@ class ReindexAllIndexRunner(object):
 
         self.version = "v7"
         self.modules_dir = "/code/modules/"
+        # percolatorドキュメント(oaiset-*)には_updatedが存在しないため、通常の日付条件つき
+        # reindexでは一切拾えない。percolator専用indexは作らない方針のため、
+        # このprefixを使って本体indexへの無条件コピー対象を判定する(_reindex_percolator_docs参照)。
+        self.percolator_prefix = "oaiset-"
         self.prefix = args.prefix
         self.today_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00")
 
@@ -720,6 +724,40 @@ class ReindexAllIndexRunner(object):
             return {"range": {"_updated": {"lt": self.until_date}}}
         return {"range": {"_updated": {"lt": self.today_str}}}
 
+    def _make_id_prefix_filter(self, starts_with):
+        """Create a filter that includes or excludes percolator IDs by their prefix."""
+        source = "doc['_id'].value.startsWith(params.prefix)" if starts_with else "!doc['_id'].value.startsWith(params.prefix)"
+        return {
+            "script": {
+                "script": {
+                    "source": source,
+                    "params": {"prefix": self.percolator_prefix},
+                }
+            }
+        }
+
+    def _reindex_percolator_docs(self, index_name):
+        """oaiset-*で始まるpercolatorドキュメントを本体indexへ無条件に複製する。
+
+        percolatorドキュメントには_updatedフィールドが存在しないため、
+        _updatedのrangeクエリに依存する通常のreindex(日付指定あり/日付ウィンドウ分割/
+        日付指定なしのいずれの分岐でも)では一切マッチせず、reindex対象から漏れる。
+        percolator専用indexは作らない方針のため、_idが`oaiset-`で始まるものだけを対象に、
+        日付条件を一切使わず毎回全件を本体indexへコピーする(件数は少なく、冪等なため
+        無条件・毎回実行で問題ない)。
+        """
+        body = {
+            "source": {
+                "remote": self._create_remote(),
+                "index": index_name,
+                "query": {"bool": {"must": [], "filter": [self._make_id_prefix_filter(True)]}},
+            },
+            "dest": {"index": index_name},
+        }
+        self._log_info("start reindex percolator docs (oaiset-*, unconditional) for {}".format(index_name))
+        self._run_reindex_or_raise(body)
+        self._log_info("end reindex percolator docs (oaiset-*, unconditional) for {}".format(index_name))
+
     def _make_alias_actions(self, index_name):
         """Build alias actions for the destination index."""
         actions = []
@@ -1015,6 +1053,10 @@ class ReindexAllIndexRunner(object):
                         updated_range_query,
                     )
                     self._log_step_end("reindex_non_author:{}".format(index_name))
+
+                    self._log_step_start("reindex_percolator_docs:{}".format(index_name))
+                    self._reindex_percolator_docs(index_name)
+                    self._log_step_end("reindex_percolator_docs:{}".format(index_name))
                 else:
                     self._log_step_start("reindex_author:{}".format(index_name))
                     self._run_author_reindex_by_db_pkid(

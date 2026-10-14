@@ -208,6 +208,10 @@ class ReindexEs7ToOsRunner(object):
 
         self.version = "os-v2"
         self.modules_dir = "/code/modules/"
+        # percolatorドキュメント(oaiset-*)には_updatedが存在しないため、通常の日付条件つき
+        # reindexでは一切拾えない。percolator専用indexは作らない方針のため、
+        # このprefixを使って本体indexへの無条件コピー対象を判定する(_reindex_percolator_docs参照)。
+        self.percolator_prefix = "oaiset-"
         self.prefix = args.prefix
         self.today_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00")
 
@@ -751,6 +755,66 @@ class ReindexEs7ToOsRunner(object):
             self._log_info("Created index: {}".format(index_name))
             self._log_step_end("create_index:{}".format(index_name))
 
+    def _make_id_prefix_filter(self, starts_with):
+        """Create a filter that includes or excludes percolator IDs by their prefix."""
+        source = "doc['_id'].value.startsWith(params.prefix)" if starts_with else "!doc['_id'].value.startsWith(params.prefix)"
+        return {
+            "script": {
+                "script": {
+                    "source": source,
+                    "params": {"prefix": self.percolator_prefix},
+                }
+            }
+        }
+
+    def _reindex_percolator_docs(self, index_name):
+        """oaiset-*で始まるpercolatorドキュメントを、日付条件に関わらず無条件に
+        OS2側の本体indexへ複製する。
+
+        percolatorドキュメントには_updatedフィールドが存在しないため、_reindex_non_author
+        の日付条件つきコピーでは一切マッチしない。ここでは2つのソースをカバーする。
+
+        (a) ES7の本体index(index_name)に直接入っているoaiset-*
+            （修正後のreindex_all_index.pyが本体indexへ直接書き込んだもの）
+        (b) ES7に残っている可能性のある旧percolator専用index(index_name + "-percolators")
+            （percolator専用index化を行っていた修正前コードが作成した、移行途中の残留データ）
+
+        (b)は存在しない場合は何もしない(通常ケース)。存在する場合は、(a)で既に投入済みの
+        最新ドキュメントを古い内容で上書きしないよう、op_type=create + conflicts=proceed で
+        「まだ存在しないIDのみ追加」する。
+        """
+        # (a) ES7本体indexに直接入っているoaiset-*をOS2本体indexへコピー
+        main_source_body = {
+            "source": {
+                "remote": self._create_remote(),
+                "index": index_name,
+                "query": {"bool": {"must": [], "filter": [self._make_id_prefix_filter(True)]}},
+            },
+            "dest": {"index": index_name},
+        }
+        self._log_info("start reindex percolator docs (oaiset-*, unconditional, from main index) for {}".format(index_name))
+        self._run_os_reindex_or_raise(main_source_body)
+        self._log_info("end reindex percolator docs (oaiset-*, unconditional, from main index) for {}".format(index_name))
+
+        # (b) ES7に旧コードが作成したpercolator専用indexが残っていれば、中身をマージする
+        legacy_percolator_index = index_name + "-percolators"
+        response = requests.get(self.es7_url + legacy_percolator_index, **self.req_args)
+        if response.status_code != 200:
+            return  # 通常ケース: 存在しない
+
+        self._log_info("legacy percolator index found: {} -> merge into {}".format(legacy_percolator_index, index_name))
+        legacy_merge_body = {
+            "source": {
+                "remote": self._create_remote(),
+                "index": legacy_percolator_index,
+                "query": {"bool": {"must": [], "filter": []}},
+            },
+            "dest": {"index": index_name, "op_type": "create"},
+            "conflicts": "proceed",
+        }
+        self._run_os_reindex_or_raise(legacy_merge_body)
+        self._log_info("legacy percolator merge done: {} -> {}".format(legacy_percolator_index, index_name))
+
     def _reindex_non_author(self, index_name):
         reindex_body = {
             "source": {
@@ -997,6 +1061,10 @@ class ReindexEs7ToOsRunner(object):
                     self._log_step_start("reindex_non_author:{}".format(index_name))
                     self._reindex_non_author(index_name)
                     self._log_step_end("reindex_non_author:{}".format(index_name))
+
+                    self._log_step_start("reindex_percolator_docs:{}".format(index_name))
+                    self._reindex_percolator_docs(index_name)
+                    self._log_step_end("reindex_percolator_docs:{}".format(index_name))
                 else:
                     self._log_step_start("reindex_author:{}".format(index_name))
                     self._reindex_author(index_name)
