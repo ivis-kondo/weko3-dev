@@ -1065,6 +1065,13 @@ class ReindexAllIndexRunner(object):
                     )
                     self._log_step_end("reindex_author:{}".format(index_name))
 
+                    # authorsもpercolator.py(invenio_oaiserver)のループ対象であり、
+                    # oaiset-*が作られ得るため、DB(pk_id)駆動のauthor reindexとは別に
+                    # 無条件コピーでカバーする(authorsテーブルにoaiset-*の行は無いため)。
+                    self._log_step_start("reindex_percolator_docs:{}".format(index_name))
+                    self._reindex_percolator_docs(index_name)
+                    self._log_step_end("reindex_percolator_docs:{}".format(index_name))
+
                 self._log_info("end reindex: {}".format(index_name))
                 self._log_step_end(index_step)
             except Exception:

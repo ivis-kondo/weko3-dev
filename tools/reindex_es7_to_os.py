@@ -1070,6 +1070,13 @@ class ReindexEs7ToOsRunner(object):
                     self._reindex_author(index_name)
                     self._log_step_end("reindex_author:{}".format(index_name))
 
+                    # authorsもpercolator.py(invenio_oaiserver)のループ対象であり、
+                    # oaiset-*が作られ得るため、DB(pk_id)駆動のauthor reindexとは別に
+                    # 無条件コピー(+ES7側レガシーpercolator indexのマージ)でカバーする。
+                    self._log_step_start("reindex_percolator_docs:{}".format(index_name))
+                    self._reindex_percolator_docs(index_name)
+                    self._log_step_end("reindex_percolator_docs:{}".format(index_name))
+
                 self._log_step_end(index_step)
             except Exception:
                 self.had_errors = True
